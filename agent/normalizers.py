@@ -173,6 +173,12 @@ def normalize_date(s: Optional[str]) -> Optional[str]:
             year = datetime.now().year
             return f'{year}-{month_num}-{day.zfill(2)}'
 
+    # Fallback: extract MM/DD/YY from a longer string
+    # e.g. "ESTIMATED 10:00 AM 06/23/26" → "2026-06-23"
+    m_fb = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', s)
+    if m_fb:
+        return normalize_date(m_fb.group(1))
+
     return s  # store raw, don't lose data
 
 

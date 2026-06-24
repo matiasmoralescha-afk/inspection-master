@@ -67,7 +67,7 @@ def _get_msg_header(msg: dict, name: str) -> str:
 
 
 def _classify_message(msg: dict) -> str:
-    """Return 'ocean_update', 'inspection_report', or 'unknown'."""
+    """Return 'ocean_update', 'air_arrival', 'inspection_report', or 'unknown'."""
     sender  = _get_msg_header(msg, 'From').lower()
     subject = _get_msg_header(msg, 'Subject')
     subject_upper = subject.upper()
@@ -76,7 +76,16 @@ def _classify_message(msg: dict) -> str:
         return 'inspection_report'
     if 'OCEAN REPORT' in subject_upper or 'OCEAN UPDATE' in subject_upper:
         return 'ocean_update'
+    if 'AIR ARRIVAL' in subject_upper:
+        return 'air_arrival'
     return 'unknown'
+
+
+def _parse_int(s: Optional[str]) -> Optional[int]:
+    try:
+        return int(s) if s else None
+    except (ValueError, TypeError):
+        return None
 
 
 def build_record_from_ocean_row(
@@ -88,6 +97,7 @@ def build_record_from_ocean_row(
     message_date_iso: Optional[str],
     fum_rules: list[dict],
     anthropic_client: Anthropic,
+    tipo_carga: str = 'ocean',
 ) -> Optional[dict]:
     """Convert one parsed ocean table row into a canonical shipment record."""
     mapped: dict = {}
@@ -145,7 +155,7 @@ def build_record_from_ocean_row(
     record: dict = {
         'cliente':                  cliente,
         'cliente_norm':             cliente_norm,
-        'tipo_carga':               'ocean',
+        'tipo_carga':               tipo_carga,
         'unit_id':                  unit_id_raw,
         'unit_id_norm':             unit_id_norm,
         'po':                       po_raw,
@@ -166,6 +176,7 @@ def build_record_from_ocean_row(
         'warehouse_arrival_at':     wh_at,
         'requiere_fumigacion':      int(req_fum),
         'quantity_description':     mapped.get('quantity_description') or None,
+        'pallets':                  _parse_int(mapped.get('pallets')),
         'comments_raw':             comments_raw or None,
         'psi_file':                 mapped.get('psi_file'),
         'fuente':                   f'{thread_id}:{message_id}',
@@ -300,11 +311,16 @@ def main() -> None:
         'INSPECTION_REPORT_QUERY',
         'from:reports@eliteqa.app newer_than:7d',
     ))
+    air_query = _apply_time_window(os.environ.get(
+        'AIR_ARRIVALS_QUERY',
+        'subject:"AIR ARRIVALS" newer_than:7d',
+    ))
 
     logger.info('Ocean query: %s', ocean_query)
+    logger.info('Air arrivals query: %s', air_query)
     logger.info('Inspection report query: %s', ir_query)
 
-    threads = _collect_threads(service, [ocean_query, ir_query])
+    threads = _collect_threads(service, [ocean_query, air_query, ir_query])
     logger.info('Total unique threads: %d', len(threads))
 
     stats = {
@@ -400,6 +416,69 @@ def main() -> None:
 
                     if args.dry_run:
                         logger.info('[DRY-RUN] Ocean upsert %s / %s: %s',
+                                    record.get('cliente'), record.get('unit_id_norm'),
+                                    {k: v for k, v in record.items() if v is not None})
+                        stats['ocean_rows_inserted'] += 1
+                    else:
+                        result = db_mod.upsert_shipment(conn, record)
+                        if result == 'inserted':
+                            stats['ocean_rows_inserted'] += 1
+                        else:
+                            stats['ocean_rows_updated'] += 1
+
+                        saved = conn.execute(
+                            'SELECT * FROM shipments WHERE cliente_norm=? AND unit_id_norm=?',
+                            (record['cliente_norm'], record['unit_id_norm']),
+                        ).fetchone()
+                        if saved:
+                            dia = business_rules.calc_dia_disponible(dict(saved), clients_config)
+                            if dia:
+                                db_mod.update_derived_fields(
+                                    conn, saved['id'],
+                                    {'dia_disponible_para_inspeccion': dia},
+                                )
+
+            elif email_type == 'air_arrival':
+                cliente = normalizers.detect_client_from_subject(subject, clients_config)
+                if not cliente:
+                    logger.warning('Air arrival: could not detect client from subject: %r — skipping', subject)
+                    stats['rows_skipped'] += 1
+                    if not args.dry_run:
+                        db_mod.mark_processed(conn, message_id, thread_id)
+                        conn.commit()
+                    continue
+
+                html = gmail_client.get_message_body(msg)
+                if not html:
+                    logger.warning('No HTML body in air arrival message %s', message_id)
+                    if not args.dry_run:
+                        db_mod.mark_processed(conn, message_id, thread_id)
+                        conn.commit()
+                    continue
+
+                raw_rows = ocean_parser.parse(html)
+                if not raw_rows:
+                    logger.warning('No rows parsed from air arrival message %s (subject: %s)', message_id, subject)
+                    if not args.dry_run:
+                        db_mod.mark_processed(conn, message_id, thread_id)
+                        conn.commit()
+                    continue
+
+                headers = [h for h in raw_rows[0].keys() if h is not None]
+                field_mapping = claude_client.map_headers(headers, conn, anthropic)
+
+                for raw_row in raw_rows:
+                    record = build_record_from_ocean_row(
+                        raw_row, field_mapping, cliente,
+                        thread_id, message_id, message_date, fum_rules, anthropic,
+                        tipo_carga='air',
+                    )
+                    if record is None:
+                        stats['rows_skipped'] += 1
+                        continue
+
+                    if args.dry_run:
+                        logger.info('[DRY-RUN] Air arrival upsert %s / %s: %s',
                                     record.get('cliente'), record.get('unit_id_norm'),
                                     {k: v for k, v in record.items() if v is not None})
                         stats['ocean_rows_inserted'] += 1

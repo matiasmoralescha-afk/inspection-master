@@ -24,6 +24,7 @@ _CANONICAL_FIELDS = [
     'shipper',
     'commodity',
     'quantity_description',
+    'pallets',
     'fda_status',
     'customs_status',          # 10+2 / ISF
     'agriculture_usda_status',
@@ -32,6 +33,9 @@ _CANONICAL_FIELDS = [
     'psi_file',
     'vessel',
     'carrier',
+    'po',
+    'bl',
+    'country_of_origin',
 ]
 
 _MODEL_HAIKU = 'claude-haiku-4-5-20251001'
@@ -71,16 +75,25 @@ Available canonical field names:
 {json.dumps(_CANONICAL_FIELDS, indent=2)}
 
 Mapping rules:
-- "CONTAINER#", "CONT#", "CONTAINER NO" → unit_id
+- "CONTAINER#", "CONT#", "CONTAINER NO", "CONTAINER" → unit_id
+- "AIRWAY BILL", "AIRWAY BILL N°", "AWB", "AWB#", "AIRWAY BILL NO" → unit_id  (for air shipments the AWB is the primary identifier)
+- "BL NO", "B/L NO", "BILL OF LADING", "BL#" → bl
 - "ETA", "ETA DATE", "ESTIMATED ARRIVAL" → eta_fecha
 - "SHIPPER", "SHIPPER NAME" → shipper (country in parentheses is extracted separately by code)
 - "QUANTITY & DESCRIPTION", "QTY & DESCRIPTION", "DESCRIPTION" → quantity_description (code will extract commodity)
+- "PIECE COUNT", "PIECES", "PCS" → quantity_description
+- "PALLETS", "PALLET", "PLT", "PLTS" → pallets
 - "FDA STATUS", "FDA" → fda_status
 - "10+2", "ISF", "10+2/ISF", "CUSTOMS" → customs_status
-- "AGRICULTURE STATUS", "USDA STATUS", "AGRICULTURE", "USDA" → agriculture_usda_status
+- "AGRICULTURE STATUS", "USDA STATUS", "AGRICULTURE", "USDA", "USDA / FUMIGATION", "USDA/FUMIGATION" → agriculture_usda_status
+- "FUMIGATION SETUP", "FUMIGATION DATE", "FUMIGATION" → fumigation_status
 - "COMMENTS", "COMMENT", "REMARKS", "NOTES" → comments_raw
 - "PSI FILE #", "PSI FILE", "PSI#" → psi_file
 - "VESSEL NAME/STEAMSHIP LINE/PORT OF ARRIVAL", "VESSEL", "VESSEL/LINE" → vessel
+- "AIRLINE", "CARRIER", "TRUCKING CO", "TRUCKING COMPANY" → carrier
+- "PO#", "PO NO", "PURCHASE ORDER", "P.O." → po
+- "CO", "COUNTRY", "COUNTRY OF ORIGIN" → country_of_origin
+- "ENTRY NO", "ENTRY NO.", "ENTRY NUMBER", "CBP ENTRY" → null  (customs entry number has no canonical field)
 - If a header has no clear canonical match → map to null
 
 Return ONLY a valid JSON object. No explanation, no markdown fences.
