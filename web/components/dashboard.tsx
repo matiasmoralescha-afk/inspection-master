@@ -290,6 +290,16 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     [visibleCols],
   )
 
+  // unique values per column, derived from the full dataset
+  const colOptions = useMemo(() => {
+    const opts: Record<string, string[]> = {}
+    for (const col of COLUMNS) {
+      const vals = [...new Set(shipments.map(s => col.getValue(s)).filter(Boolean))].sort()
+      opts[col.key] = vals
+    }
+    return opts
+  }, [shipments])
+
   function toggleCol(key: string, on: boolean) {
     setVisibleCols(prev => {
       const next = new Set(prev)
@@ -319,12 +329,11 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
           .join(' ').toLowerCase()
         if (!hay.includes(q)) return false
       }
-      // per-column filters
+      // per-column filters — exact match against selected value
       for (const col of COLUMNS) {
         const fv = colFilters[col.key]
         if (!fv) continue
-        const cell = col.getValue(s).toLowerCase()
-        if (!cell.includes(fv.toLowerCase())) return false
+        if (col.getValue(s) !== fv) return false
       }
       return true
     })
@@ -417,19 +426,30 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                     </th>
                   ))}
                 </tr>
-                {/* per-column filter inputs */}
+                {/* per-column filter selects — values from real data */}
                 <tr className="bg-gray-700">
-                  {visibleColumns.map(col => (
-                    <td key={col.key} className="px-2 py-1">
-                      <input
-                        type="text"
-                        value={colFilters[col.key] ?? ''}
-                        onChange={e => setColFilters(prev => ({ ...prev, [col.key]: e.target.value }))}
-                        placeholder="Filtrar…"
-                        className="w-full bg-gray-600 text-white placeholder-gray-400 text-xs rounded px-2 py-0.5 border border-gray-500 focus:outline-none focus:border-blue-400 min-w-[60px]"
-                      />
-                    </td>
-                  ))}
+                  {visibleColumns.map(col => {
+                    const opts = colOptions[col.key] ?? []
+                    const active = !!colFilters[col.key]
+                    return (
+                      <td key={col.key} className="px-2 py-1">
+                        <select
+                          value={colFilters[col.key] ?? ''}
+                          onChange={e => setColFilters(prev => ({ ...prev, [col.key]: e.target.value }))}
+                          className={`w-full text-xs rounded px-1.5 py-0.5 border focus:outline-none focus:border-blue-400 min-w-[70px] max-w-[200px] ${
+                            active
+                              ? 'bg-blue-600 text-white border-blue-400'
+                              : 'bg-gray-600 text-gray-200 border-gray-500'
+                          }`}
+                        >
+                          <option value="">—</option>
+                          {opts.map(v => (
+                            <option key={v} value={v}>{v}</option>
+                          ))}
+                        </select>
+                      </td>
+                    )
+                  })}
                 </tr>
               </thead>
 
