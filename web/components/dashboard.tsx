@@ -1,7 +1,18 @@
 'use client'
 
 import { useState, useMemo, useRef, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import type { Shipment } from '@/lib/types'
+
+function timeAgo(isoStr: string): string {
+  const diff = Date.now() - new Date(isoStr).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return 'hace un momento'
+  if (mins < 60) return `hace ${mins} min`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `hace ${hrs}h`
+  return `hace ${Math.floor(hrs / 24)}d`
+}
 
 // ─── column definitions ──────────────────────────────────────────────────────
 
@@ -272,7 +283,12 @@ function ColPicker({
 
 const DEFAULT_VISIBLE = new Set(COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
 
+type SortState = { key: string; dir: 'asc' | 'desc' } | null
+
 export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
+  const router = useRouter()
+  const [refreshing, setRefreshing] = useState(false)
+
   // global filters (top bar)
   const [search, setSearch]             = useState('')
   const [filterCliente, setCliente]     = useState('')
@@ -282,8 +298,25 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   // column visibility
   const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
 
-  // per-column text filters (shown in the header filter row)
+  // per-column filters
   const [colFilters, setColFilters] = useState<Record<string, string>>({})
+
+  // sort
+  const [sort, setSort] = useState<SortState>(null)
+
+  function handleSort(key: string) {
+    setSort(prev => {
+      if (!prev || prev.key !== key) return { key, dir: 'asc' }
+      if (prev.dir === 'asc') return { key, dir: 'desc' }
+      return null
+    })
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true)
+    router.refresh()
+    setTimeout(() => setRefreshing(false), 1500)
+  }
 
   const visibleColumns = useMemo(
     () => COLUMNS.filter(c => visibleCols.has(c.key)),
@@ -353,7 +386,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     [shipments],
   )
 
-  const filtered = useMemo(() => {
+  const baseFiltered = useMemo(() => {
     const q = search.toLowerCase()
     return shipments.filter(s => {
       // global bar filters
@@ -375,6 +408,21 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     })
   }, [shipments, search, filterCliente, filterEstado, filterCommodity, colFilters])
 
+  const filtered = useMemo(() => {
+    if (!sort) return baseFiltered
+    const col = COLUMNS.find(c => c.key === sort.key)
+    if (!col) return baseFiltered
+    return [...baseFiltered].sort((a, b) => {
+      const va = col.getValue(a)
+      const vb = col.getValue(b)
+      if (va === vb) return 0
+      if (!va) return 1
+      if (!vb) return -1
+      const cmp = va.localeCompare(vb, undefined, { numeric: true })
+      return sort.dir === 'asc' ? cmp : -cmp
+    })
+  }, [baseFiltered, sort])
+
   const hasColFilters = Object.values(colFilters).some(Boolean)
 
   const stats = {
@@ -384,10 +432,10 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     cerrados: shipments.filter(s => s.estado_general === 'cerrado').length,
   }
 
-  const lastUpdate = shipments.length
+  const lastUpdateIso = shipments.length
     ? shipments.reduce((a, b) =>
         a.ultima_actualizacion > b.ultima_actualizacion ? a : b
-      ).ultima_actualizacion.slice(0, 16).replace('T', ' ')
+      ).ultima_actualizacion
     : null
 
   return (
@@ -397,15 +445,26 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
         <div className="max-w-screen-2xl mx-auto flex items-start justify-between gap-6">
           <div>
             <h1 className="text-lg font-bold tracking-tight">Inspection Master</h1>
-            {lastUpdate && (
-              <p className="text-xs text-gray-400 mt-0.5">Actualizado: {lastUpdate}</p>
+            {lastUpdateIso && (
+              <p className="text-xs text-gray-400 mt-0.5">Actualizado: {timeAgo(lastUpdateIso)}</p>
             )}
           </div>
-          <div className="flex gap-6">
+          <div className="flex items-start gap-6">
             <Stat label="Total"          value={stats.total}    color="text-white" />
             <Stat label="Abiertos"       value={stats.abiertos} color="text-blue-400" />
             <Stat label="Listos p/Insp." value={stats.listos}   color="text-green-400" />
             <Stat label="Cerrados"       value={stats.cerrados} color="text-gray-400" />
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="self-center ml-2 p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors disabled:opacity-50"
+              title="Refrescar datos"
+            >
+              <svg className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
           </div>
         </div>
       </header>
@@ -451,16 +510,25 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
           <div className="rounded-lg border border-gray-200 overflow-hidden shadow-sm">
             <table className="w-full border-collapse bg-white text-xs">
               <thead className="bg-gray-800 sticky top-[57px] z-10">
-                {/* column labels */}
+                {/* column labels — click to sort */}
                 <tr>
-                  {visibleColumns.map(col => (
-                    <th
-                      key={col.key}
-                      className={`px-3 py-2.5 text-left font-semibold whitespace-nowrap text-gray-200 ${col.thClass ?? ''}`}
-                    >
-                      {col.label}
-                    </th>
-                  ))}
+                  {visibleColumns.map(col => {
+                    const isActive = sort?.key === col.key
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => handleSort(col.key)}
+                        className={`px-3 py-2.5 text-left font-semibold whitespace-nowrap select-none cursor-pointer hover:bg-gray-700 transition-colors ${col.thClass ?? ''} ${isActive ? 'text-blue-300' : 'text-gray-200'}`}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          {col.label}
+                          <span className="text-[10px] opacity-60">
+                            {isActive ? (sort!.dir === 'asc' ? '↑' : '↓') : '↕'}
+                          </span>
+                        </span>
+                      </th>
+                    )
+                  })}
                 </tr>
                 {/* per-column filter selects — values from real data */}
                 <tr className="bg-gray-700">

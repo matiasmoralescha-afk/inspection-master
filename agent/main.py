@@ -135,9 +135,12 @@ def build_record_from_ocean_row(
     fum_completed_at: Optional[str] = message_date_iso if fum_completed else None
 
     wh_confirmed = bool(parsed_comments.get('warehouse_arrival_confirmed', False))
-    wh_at        = parsed_comments.get('warehouse_arrival_at')
+    wh_at        = normalizers.normalize_date(parsed_comments.get('warehouse_arrival_at'))
 
     cliente_norm = normalizers.normalize_client_name(cliente)
+
+    po_raw  = mapped.get('po')
+    po_norm = normalizers.normalize_po(po_raw)
 
     record: dict = {
         'cliente':                  cliente,
@@ -145,13 +148,14 @@ def build_record_from_ocean_row(
         'tipo_carga':               'ocean',
         'unit_id':                  unit_id_raw,
         'unit_id_norm':             unit_id_norm,
-        'po':                       None,
-        'po_norm':                  None,
+        'po':                       po_raw,
+        'po_norm':                  po_norm,
         'shipper':                  shipper_name,
         'country_of_origin':        country,
         'commodity':                commodity_norm,
         'eta_fecha':                normalizers.normalize_date(mapped.get('eta_fecha')),
         'vessel':                   mapped.get('vessel'),
+        'carrier':                  mapped.get('carrier'),
         'bl':                       bl,
         'fda_status':               mapped.get('fda_status'),
         'customs_status':           mapped.get('customs_status'),
