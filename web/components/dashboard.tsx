@@ -290,15 +290,35 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     [visibleCols],
   )
 
-  // unique values per column, derived from the full dataset
+  // unique values per column — cascading:
+  // each column's options come from rows that pass ALL other active filters,
+  // so selecting "Alpine Fresh" narrows down Container, Commodity, FDA, etc.
   const colOptions = useMemo(() => {
     const opts: Record<string, string[]> = {}
     for (const col of COLUMNS) {
-      const vals = [...new Set(shipments.map(s => col.getValue(s)).filter(Boolean))].sort()
-      opts[col.key] = vals
+      const rows = shipments.filter(s => {
+        // global bar filters
+        if (filterCliente && s.cliente !== filterCliente) return false
+        if (filterEstado && s.estado_general !== filterEstado) return false
+        if (filterCommodity && s.commodity !== filterCommodity) return false
+        if (search) {
+          const q = search.toLowerCase()
+          const hay = [s.unit_id, s.po, s.shipper, s.vessel, s.commodity, s.psi_file]
+            .join(' ').toLowerCase()
+          if (!hay.includes(q)) return false
+        }
+        // per-column filters — skip this column's own filter
+        for (const other of COLUMNS) {
+          if (other.key === col.key) continue
+          const fv = colFilters[other.key]
+          if (fv && other.getValue(s) !== fv) return false
+        }
+        return true
+      })
+      opts[col.key] = [...new Set(rows.map(s => col.getValue(s)).filter(Boolean))].sort()
     }
     return opts
-  }, [shipments])
+  }, [shipments, search, filterCliente, filterEstado, filterCommodity, colFilters])
 
   function toggleCol(key: string, on: boolean) {
     setVisibleCols(prev => {
@@ -307,6 +327,22 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       return next
     })
   }
+
+  // when a column's selected value is no longer available (cascaded out), clear it
+  useEffect(() => {
+    setColFilters(prev => {
+      const next = { ...prev }
+      let changed = false
+      for (const col of COLUMNS) {
+        const fv = next[col.key]
+        if (fv && !(colOptions[col.key] ?? []).includes(fv)) {
+          delete next[col.key]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [colOptions])
 
   const clientes = useMemo(
     () => [...new Set(shipments.map(s => s.cliente))].sort(),
