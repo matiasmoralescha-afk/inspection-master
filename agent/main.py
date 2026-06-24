@@ -270,6 +270,13 @@ def main() -> None:
     db_path = _require_env('DB_PATH')
     conn    = db_mod.init_db(db_path)
 
+    # In stateless environments (GitHub Actions), restore processed_messages
+    # from Supabase so we don't re-process emails from previous runs
+    sb_url = os.environ.get('SUPABASE_URL', '')
+    sb_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
+    if sb_url and sb_key and not args.dry_run:
+        supabase_sync.restore_processed_messages(conn, sb_url, sb_key)
+
     gmail_token = _require_env('GMAIL_TOKEN_FILE')
     service     = gmail_client.build_service(gmail_token)
 

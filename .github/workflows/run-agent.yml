@@ -1,0 +1,40 @@
+name: Inspection Agent
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # cada hora, en punto
+  workflow_dispatch:        # también manual desde GitHub Actions tab
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e . -q
+
+      - name: Write Gmail token
+        run: |
+          mkdir -p credentials data
+          echo '${{ secrets.GMAIL_TOKEN_JSON }}' > credentials/gmail-token.json
+
+      - name: Run agent
+        env:
+          GMAIL_TOKEN_FILE: credentials/gmail-token.json
+          DB_PATH: data/inspection_agent.db
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OCEAN_UPDATE_QUERY: '(subject:"OCEAN REPORT" OR subject:"OCEAN UPDATE") newer_than:7d'
+          INSPECTION_REPORT_QUERY: 'from:reports@eliteqa.app newer_than:7d'
+        run: python -m agent.main

@@ -54,6 +54,34 @@ def sync(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> 
         return 0
 
 
+def restore_processed_messages(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> int:
+    """
+    Pull processed_messages FROM Supabase into local SQLite.
+    Call at startup in stateless environments (GitHub Actions) so the agent
+    doesn't re-process emails it already handled in previous runs.
+    """
+    try:
+        from supabase import create_client
+        client = create_client(supabase_url, service_role_key)
+
+        result = client.table('processed_messages').select('*').execute()
+        rows = result.data or []
+        if not rows:
+            return 0
+
+        conn.executemany(
+            'INSERT OR IGNORE INTO processed_messages (message_id, thread_id, processed_at) VALUES (?, ?, ?)',
+            [(r['message_id'], r['thread_id'], r['processed_at']) for r in rows],
+        )
+        conn.commit()
+        logger.info('Restored %d processed_messages from Supabase', len(rows))
+        return len(rows)
+
+    except Exception:
+        logger.exception('Failed to restore processed_messages from Supabase — will reprocess recent emails')
+        return 0
+
+
 def sync_processed_messages(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> None:
     """Sync processed_messages so the agent doesn't re-process emails when switching machines."""
     try:
