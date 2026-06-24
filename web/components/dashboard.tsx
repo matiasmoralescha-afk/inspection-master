@@ -1,9 +1,146 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import type { Shipment } from '@/lib/types'
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─── column definitions ──────────────────────────────────────────────────────
+
+type Col = {
+  key: string
+  label: string
+  defaultVisible: boolean
+  // raw string used for column-level filtering (null = not filterable)
+  getValue: (s: Shipment) => string
+  // what renders inside the cell
+  render: (s: Shipment) => React.ReactNode
+  thClass?: string
+  tdClass?: string
+}
+
+const COLUMNS: Col[] = [
+  {
+    key: 'cliente', label: 'Cliente', defaultVisible: true,
+    getValue: s => s.cliente ?? '',
+    render:   s => <span className="font-medium text-gray-900 whitespace-nowrap">{s.cliente}</span>,
+  },
+  {
+    key: 'unit_id', label: 'Container / AWB', defaultVisible: true,
+    getValue: s => s.unit_id ?? '',
+    render:   s => <span className="font-mono text-gray-700">{s.unit_id ?? '—'}</span>,
+  },
+  {
+    key: 'po', label: 'PO', defaultVisible: true,
+    getValue: s => s.po ?? '',
+    render:   s => <span className="font-mono text-gray-500">{s.po ?? '—'}</span>,
+  },
+  {
+    key: 'commodity', label: 'Commodity', defaultVisible: true,
+    getValue: s => s.commodity ?? '',
+    render:   s => <>{s.commodity ?? '—'}</>,
+  },
+  {
+    key: 'country_of_origin', label: 'País', defaultVisible: true,
+    getValue: s => s.country_of_origin ?? '',
+    render:   s => <>{s.country_of_origin ?? '—'}</>,
+  },
+  {
+    key: 'eta_fecha', label: 'ETA', defaultVisible: true,
+    getValue: s => s.eta_fecha ?? '',
+    render:   s => <EtaCell eta={s.eta_fecha} />,
+  },
+  {
+    key: 'shipper', label: 'Shipper', defaultVisible: true,
+    getValue: s => s.shipper ?? '',
+    render:   s => <span className="max-w-[130px] truncate block text-gray-600">{s.shipper ?? '—'}</span>,
+    tdClass: 'max-w-[130px]',
+  },
+  {
+    key: 'vessel', label: 'Buque', defaultVisible: false,
+    getValue: s => s.vessel ?? '',
+    render:   s => <span className="max-w-[130px] truncate block text-gray-600">{s.vessel ?? '—'}</span>,
+    tdClass: 'max-w-[130px]',
+  },
+  {
+    key: 'bl', label: 'BL#', defaultVisible: false,
+    getValue: s => s.bl ?? '',
+    render:   s => <span className="font-mono text-gray-600">{s.bl ?? '—'}</span>,
+  },
+  {
+    key: 'fda_status', label: 'FDA', defaultVisible: true,
+    getValue: s => s.fda_status ?? '',
+    render:   s => <StatusCell value={s.fda_status} />,
+  },
+  {
+    key: 'agriculture_usda_status', label: 'USDA', defaultVisible: true,
+    getValue: s => s.agriculture_usda_status ?? '',
+    render:   s => <span className="max-w-[180px] truncate block"><StatusCell value={s.agriculture_usda_status} /></span>,
+    tdClass: 'max-w-[180px]',
+  },
+  {
+    key: 'customs_status', label: 'Customs', defaultVisible: true,
+    getValue: s => s.customs_status ?? '',
+    render:   s => <StatusCell value={s.customs_status} />,
+  },
+  {
+    key: 'fumigation_status', label: 'Fumigación', defaultVisible: false,
+    getValue: s => s.fumigation_status ?? '',
+    render:   s => <StatusCell value={s.fumigation_status} />,
+  },
+  {
+    key: 'warehouse_arrival_confirmed', label: 'Bodega', defaultVisible: true,
+    getValue: s => s.warehouse_arrival_confirmed ? 'sí' : 'no',
+    render:   s => s.warehouse_arrival_confirmed
+      ? <span className="text-green-600 font-bold">✓</span>
+      : <span className="text-gray-300">—</span>,
+    thClass: 'text-center', tdClass: 'text-center',
+  },
+  {
+    key: 'ready_for_inspection', label: 'Listo', defaultVisible: true,
+    getValue: s => s.ready_for_inspection ? 'sí' : 'no',
+    render:   s => s.ready_for_inspection && s.estado_general !== 'cerrado'
+      ? <span className="text-green-600 font-bold">✓</span>
+      : <span className="text-gray-300">—</span>,
+    thClass: 'text-center', tdClass: 'text-center',
+  },
+  {
+    key: 'overall_grade', label: 'Grade', defaultVisible: true,
+    getValue: s => s.overall_grade ?? '',
+    render:   s => s.report_url
+      ? <a href={s.report_url} target="_blank" rel="noopener noreferrer"
+           className={`${gradeColor(s.overall_grade)} hover:underline`}>
+          {s.overall_grade ?? 'Ver'}
+        </a>
+      : <span className={gradeColor(s.overall_grade)}>{s.overall_grade ?? '—'}</span>,
+  },
+  {
+    key: 'pallets', label: 'Pallets', defaultVisible: false,
+    getValue: s => s.pallets != null ? String(s.pallets) : '',
+    render:   s => <>{s.pallets ?? '—'}</>,
+    thClass: 'text-right', tdClass: 'text-right',
+  },
+  {
+    key: 'dia_disponible_para_inspeccion', label: 'Día Disp.', defaultVisible: true,
+    getValue: s => s.dia_disponible_para_inspeccion ?? '',
+    render:   s => <EtaCell eta={s.dia_disponible_para_inspeccion} />,
+  },
+  {
+    key: 'inspection_status', label: 'Inspección', defaultVisible: true,
+    getValue: s => s.inspection_status ?? '',
+    render:   s => <InspBadge status={s.inspection_status} />,
+  },
+  {
+    key: 'psi_file', label: 'PSI File', defaultVisible: false,
+    getValue: s => s.psi_file ?? '',
+    render:   s => <span className="font-mono text-gray-500 text-xs">{s.psi_file ?? '—'}</span>,
+  },
+  {
+    key: 'estado_general', label: 'Estado', defaultVisible: true,
+    getValue: s => s.estado_general ?? '',
+    render:   s => <StateBadge state={s.estado_general} />,
+  },
+]
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 function statusColor(val: string | null): string {
   if (!val) return 'text-gray-400'
@@ -28,14 +165,14 @@ function EtaCell({ eta }: { eta: string | null }) {
   const today = new Date().toISOString().slice(0, 10)
   const [, m, d] = eta.split('-')
   const label = `${m}/${d}`
-  if (eta < today) return <span className="text-red-500 text-xs">{label}</span>
-  if (eta === today) return <span className="text-blue-600 font-bold text-xs">{label} ●</span>
-  return <span className="text-gray-800 text-xs">{label}</span>
+  if (eta < today) return <span className="text-red-500">{label}</span>
+  if (eta === today) return <span className="text-blue-600 font-bold">{label} ●</span>
+  return <span className="text-gray-800">{label}</span>
 }
 
 function StatusCell({ value }: { value: string | null }) {
   if (!value) return <span className="text-gray-300">—</span>
-  return <span className={`text-xs ${statusColor(value)}`}>{value}</span>
+  return <span className={`${statusColor(value)}`}>{value}</span>
 }
 
 function InspBadge({ status }: { status: string }) {
@@ -46,7 +183,7 @@ function InspBadge({ status }: { status: string }) {
     rechazada:  'bg-red-100 text-red-600',
   }
   return (
-    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${map[status] ?? 'bg-gray-100 text-gray-500'}`}>
+    <span className={`px-1.5 py-0.5 rounded font-medium ${map[status] ?? 'bg-gray-100 text-gray-500'}`}>
       {status}
     </span>
   )
@@ -54,7 +191,7 @@ function InspBadge({ status }: { status: string }) {
 
 function StateBadge({ state }: { state: string }) {
   return (
-    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+    <span className={`px-1.5 py-0.5 rounded font-medium ${
       state === 'abierto' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'
     }`}>
       {state}
@@ -62,44 +199,104 @@ function StateBadge({ state }: { state: string }) {
   )
 }
 
-function Th({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <th className={`px-3 py-2.5 text-left text-xs font-semibold whitespace-nowrap text-gray-200 ${className}`}>
-      {children}
-    </th>
-  )
-}
+// ─── column picker dropdown ───────────────────────────────────────────────────
 
-function Td({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <td className={`px-3 py-2 text-xs whitespace-nowrap ${className}`}>{children}</td>
-  )
-}
-
-function SelectFilter({
-  value, onChange, options, placeholder,
+function ColPicker({
+  visible, onChange,
 }: {
-  value: string; onChange: (v: string) => void; options: string[]; placeholder: string
+  visible: Set<string>
+  onChange: (key: string, on: boolean) => void
 }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
   return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      className="border border-gray-200 rounded-md px-2.5 py-1.5 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-    >
-      <option value="">{placeholder}</option>
-      {options.map(o => <option key={o} value={o}>{o}</option>)}
-    </select>
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 border border-gray-200 rounded-md px-3 py-1.5 text-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+        </svg>
+        Columnas
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-52">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Mostrar columnas</p>
+          <div className="space-y-1 max-h-80 overflow-y-auto">
+            {COLUMNS.map(col => (
+              <label key={col.key} className="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1">
+                <input
+                  type="checkbox"
+                  checked={visible.has(col.key)}
+                  onChange={e => onChange(col.key, e.target.checked)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="text-sm text-gray-700">{col.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="border-t border-gray-100 mt-2 pt-2 flex gap-2">
+            <button
+              onClick={() => COLUMNS.forEach(c => onChange(c.key, true))}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Mostrar todas
+            </button>
+            <span className="text-gray-300">·</span>
+            <button
+              onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))}
+              className="text-xs text-gray-500 hover:underline"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
-// ─── main component ──────────────────────────────────────────────────────────
+// ─── main component ───────────────────────────────────────────────────────────
+
+const DEFAULT_VISIBLE = new Set(COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
 
 export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
-  const [search, setSearch]           = useState('')
-  const [filterCliente, setCliente]   = useState('')
-  const [filterEstado, setEstado]     = useState('abierto')
+  // global filters (top bar)
+  const [search, setSearch]             = useState('')
+  const [filterCliente, setCliente]     = useState('')
+  const [filterEstado, setEstado]       = useState('abierto')
   const [filterCommodity, setCommodity] = useState('')
+
+  // column visibility
+  const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
+
+  // per-column text filters (shown in the header filter row)
+  const [colFilters, setColFilters] = useState<Record<string, string>>({})
+
+  const visibleColumns = useMemo(
+    () => COLUMNS.filter(c => visibleCols.has(c.key)),
+    [visibleCols],
+  )
+
+  function toggleCol(key: string, on: boolean) {
+    setVisibleCols(prev => {
+      const next = new Set(prev)
+      on ? next.add(key) : next.delete(key)
+      return next
+    })
+  }
 
   const clientes = useMemo(
     () => [...new Set(shipments.map(s => s.cliente))].sort(),
@@ -113,6 +310,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
     return shipments.filter(s => {
+      // global bar filters
       if (filterCliente && s.cliente !== filterCliente) return false
       if (filterEstado && s.estado_general !== filterEstado) return false
       if (filterCommodity && s.commodity !== filterCommodity) return false
@@ -121,9 +319,18 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
           .join(' ').toLowerCase()
         if (!hay.includes(q)) return false
       }
+      // per-column filters
+      for (const col of COLUMNS) {
+        const fv = colFilters[col.key]
+        if (!fv) continue
+        const cell = col.getValue(s).toLowerCase()
+        if (!cell.includes(fv.toLowerCase())) return false
+      }
       return true
     })
-  }, [shipments, search, filterCliente, filterEstado, filterCommodity])
+  }, [shipments, search, filterCliente, filterEstado, filterCommodity, colFilters])
+
+  const hasColFilters = Object.values(colFilters).some(Boolean)
 
   const stats = {
     total:    shipments.length,
@@ -150,43 +357,46 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
             )}
           </div>
           <div className="flex gap-6">
-            <Stat label="Total" value={stats.total} color="text-white" />
-            <Stat label="Abiertos" value={stats.abiertos} color="text-blue-400" />
-            <Stat label="Listos p/Insp." value={stats.listos} color="text-green-400" />
-            <Stat label="Cerrados" value={stats.cerrados} color="text-gray-400" />
+            <Stat label="Total"          value={stats.total}    color="text-white" />
+            <Stat label="Abiertos"       value={stats.abiertos} color="text-blue-400" />
+            <Stat label="Listos p/Insp." value={stats.listos}   color="text-green-400" />
+            <Stat label="Cerrados"       value={stats.cerrados} color="text-gray-400" />
           </div>
         </div>
       </header>
 
-      {/* ── Filters ── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 sticky top-0 z-10 shadow-sm">
+      {/* ── Filter bar ── */}
+      <div className="bg-white border-b border-gray-200 px-6 py-3 sticky top-0 z-20 shadow-sm">
         <div className="max-w-screen-2xl mx-auto flex flex-wrap gap-3 items-center">
           <input
             type="text"
             placeholder="Buscar container, PO, shipper..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-60 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <SelectFilter value={filterCliente} onChange={setCliente} options={clientes} placeholder="Todos los clientes" />
-          <SelectFilter
-            value={filterEstado}
-            onChange={setEstado}
-            options={['abierto', 'cerrado']}
-            placeholder="Todos los estados"
-          />
-          <SelectFilter value={filterCommodity} onChange={setCommodity} options={commodities} placeholder="Todos los commodities" />
-          {(search || filterCliente || filterEstado || filterCommodity) && (
+          <BarSelect value={filterCliente}   onChange={setCliente}   options={clientes}               placeholder="Todos los clientes" />
+          <BarSelect value={filterEstado}    onChange={setEstado}    options={['abierto','cerrado']}   placeholder="Todos los estados" />
+          <BarSelect value={filterCommodity} onChange={setCommodity} options={commodities}             placeholder="Todos los commodities" />
+
+          {(search || filterCliente || filterEstado || filterCommodity || hasColFilters) && (
             <button
-              onClick={() => { setSearch(''); setCliente(''); setEstado('abierto'); setCommodity('') }}
+              onClick={() => {
+                setSearch(''); setCliente(''); setEstado('abierto')
+                setCommodity(''); setColFilters({})
+              }}
               className="text-xs text-gray-500 hover:text-gray-800 underline"
             >
-              Limpiar
+              Limpiar todo
             </button>
           )}
-          <span className="ml-auto text-xs text-gray-400">
-            {filtered.length} de {shipments.length} envíos
-          </span>
+
+          <div className="ml-auto flex items-center gap-3">
+            <span className="text-xs text-gray-400">
+              {filtered.length} de {shipments.length} envíos
+            </span>
+            <ColPicker visible={visibleCols} onChange={toggleCol} />
+          </div>
         </div>
       </div>
 
@@ -194,27 +404,35 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       <main className="flex-1 overflow-x-auto px-6 py-4">
         <div className="max-w-screen-2xl mx-auto">
           <div className="rounded-lg border border-gray-200 overflow-hidden shadow-sm">
-            <table className="w-full border-collapse bg-white">
-              <thead className="bg-gray-800">
+            <table className="w-full border-collapse bg-white text-xs">
+              <thead className="bg-gray-800 sticky top-[57px] z-10">
+                {/* column labels */}
                 <tr>
-                  <Th>Cliente</Th>
-                  <Th>Container / AWB</Th>
-                  <Th>PO</Th>
-                  <Th>Commodity</Th>
-                  <Th>País</Th>
-                  <Th>ETA</Th>
-                  <Th>Shipper</Th>
-                  <Th>FDA</Th>
-                  <Th>USDA</Th>
-                  <Th>Customs</Th>
-                  <Th className="text-center">Bodega</Th>
-                  <Th className="text-center">Listo</Th>
-                  <Th>Grade</Th>
-                  <Th>Día Disp.</Th>
-                  <Th>Inspección</Th>
-                  <Th>Estado</Th>
+                  {visibleColumns.map(col => (
+                    <th
+                      key={col.key}
+                      className={`px-3 py-2.5 text-left font-semibold whitespace-nowrap text-gray-200 ${col.thClass ?? ''}`}
+                    >
+                      {col.label}
+                    </th>
+                  ))}
+                </tr>
+                {/* per-column filter inputs */}
+                <tr className="bg-gray-700">
+                  {visibleColumns.map(col => (
+                    <td key={col.key} className="px-2 py-1">
+                      <input
+                        type="text"
+                        value={colFilters[col.key] ?? ''}
+                        onChange={e => setColFilters(prev => ({ ...prev, [col.key]: e.target.value }))}
+                        placeholder="Filtrar…"
+                        className="w-full bg-gray-600 text-white placeholder-gray-400 text-xs rounded px-2 py-0.5 border border-gray-500 focus:outline-none focus:border-blue-400 min-w-[60px]"
+                      />
+                    </td>
+                  ))}
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-gray-100">
                 {filtered.map(s => {
                   const isCerrado = s.estado_general === 'cerrado'
@@ -226,57 +444,22 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                         'hover:bg-gray-50 transition-colors',
                         isCerrado ? 'opacity-40' : '',
                         isListo ? 'bg-green-50 hover:bg-green-100' : '',
-                      ].join(' ')}
+                      ].filter(Boolean).join(' ')}
                     >
-                      <Td className="font-medium text-gray-900">{s.cliente}</Td>
-                      <Td className="font-mono text-gray-700">{s.unit_id ?? '—'}</Td>
-                      <Td className="font-mono text-gray-500">{s.po ?? '—'}</Td>
-                      <Td>{s.commodity ?? '—'}</Td>
-                      <Td>{s.country_of_origin ?? '—'}</Td>
-                      <Td><EtaCell eta={s.eta_fecha} /></Td>
-                      <Td className="max-w-[130px] truncate text-gray-600">{s.shipper ?? '—'}</Td>
-                      <Td><StatusCell value={s.fda_status} /></Td>
-                      <Td className="max-w-[180px] truncate"><StatusCell value={s.agriculture_usda_status} /></Td>
-                      <Td><StatusCell value={s.customs_status} /></Td>
-                      <Td className="text-center">
-                        {s.warehouse_arrival_confirmed ? (
-                          <span className="text-green-600">✓</span>
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </Td>
-                      <Td className="text-center">
-                        {isListo ? (
-                          <span className="text-green-600 font-bold">✓</span>
-                        ) : (
-                          <span className="text-gray-300">—</span>
-                        )}
-                      </Td>
-                      <Td>
-                        {s.report_url ? (
-                          <a
-                            href={s.report_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={`${gradeColor(s.overall_grade)} hover:underline`}
-                          >
-                            {s.overall_grade ?? 'Ver'}
-                          </a>
-                        ) : (
-                          <span className={gradeColor(s.overall_grade)}>{s.overall_grade ?? '—'}</span>
-                        )}
-                      </Td>
-                      <Td>
-                        <EtaCell eta={s.dia_disponible_para_inspeccion} />
-                      </Td>
-                      <Td><InspBadge status={s.inspection_status} /></Td>
-                      <Td><StateBadge state={s.estado_general} /></Td>
+                      {visibleColumns.map(col => (
+                        <td
+                          key={col.key}
+                          className={`px-3 py-2 whitespace-nowrap ${col.tdClass ?? ''}`}
+                        >
+                          {col.render(s)}
+                        </td>
+                      ))}
                     </tr>
                   )
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={16} className="py-16 text-center text-sm text-gray-400">
+                    <td colSpan={visibleColumns.length} className="py-16 text-center text-sm text-gray-400">
                       No se encontraron envíos con los filtros actuales.
                     </td>
                   </tr>
@@ -296,5 +479,20 @@ function Stat({ label, value, color }: { label: string; value: number; color: st
       <div className={`text-2xl font-bold tabular-nums ${color}`}>{value}</div>
       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
     </div>
+  )
+}
+
+function BarSelect({ value, onChange, options, placeholder }: {
+  value: string; onChange: (v: string) => void; options: string[]; placeholder: string
+}) {
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className="border border-gray-200 rounded-md px-2.5 py-1.5 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+    >
+      <option value="">{placeholder}</option>
+      {options.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>
   )
 }
