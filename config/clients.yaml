@@ -1,0 +1,168 @@
+alpine_fresh:
+  display_name: "Alpine Fresh"
+  aliases:
+    - "Alpine"
+    - "Alpine Fresh LLC"
+    - "ALPINE FRESH"
+    - "ALPINE"
+    - "Alpine Fresh"
+  subject_patterns:
+    - "ALPINE FRESH"
+    - "ALPINE"
+  cutoff_hour: 19
+  known_modes: [ocean, air]
+
+prime_time:
+  display_name: "Prime Time"
+  aliases:
+    - "Prime Time"
+    - "PRIME TIME"
+    - "Prime Time Produce"
+    - "PRIME TIME PRODUCE"
+    - "Prime Time Intl"
+    - "PRIME TIME INTL"
+  subject_patterns:
+    - "PRIME TIME"
+  cutoff_hour: null
+  known_modes: [ocean, air, terrestre]
+
+altar_produce:
+  display_name: "Altar Produce"
+  aliases:
+    - "Altar Produce"
+    - "ALTAR PRODUCE"
+    - "Altar Produce LLC"
+    - "ALTAR PRODUCE LLC"
+    - "Altar - Texas"
+    - "ALTAR - TEXAS"
+    - "Altar"
+    - "ALTAR"
+  subject_patterns:
+    - "ALTAR PRODUCE"
+  cutoff_hour: null
+  known_modes: [ocean]
+
+growers_are_us:
+  display_name: "Growers Are Us"
+  aliases:
+    - "Growers Are Us"
+    - "GROWERS ARE US"
+    - "Growers Are Us LLC"
+    - "GROWERS ARE US LLC"
+    - "Growers Are Us, LLC"
+    - "GROWERS ARE US, LLC"
+  subject_patterns:
+    - "GROWERS ARE US"
+  cutoff_hour: null
+  known_modes: [ocean, air]
+
+greenfruit:
+  display_name: "GreenFruit"
+  aliases:
+    - "GreenFruit"
+    - "GREENFRUIT"
+    - "GreenFruit Avocados"
+    - "GREENFRUIT AVOCADOS"
+    - "Green Fruit"
+    - "GREEN FRUIT"
+  subject_patterns:
+    - "GREENFRUIT"
+    - "GREEN FRUIT"
+  cutoff_hour: null
+  known_modes: [ocean]
+
+fresh_way:
+  display_name: "Fresh Way"
+  aliases:
+    - "Fresh Way"
+    - "FRESH WAY"
+    - "Fresh Way USA"
+    - "FRESH WAY USA"
+  subject_patterns:
+    - "FRESH WAY"
+  cutoff_hour: null
+  known_modes: [ocean, air, terrestre]
+
+robinson_fresh:
+  display_name: "Robinson Fresh"
+  aliases:
+    - "Robinson Fresh"
+    - "ROBINSON FRESH"
+    - "Robinson Fresh - Vegetables"
+    - "Robinson Fresh - Limes"
+    - "Robinson Fresh - Apples"
+    - "Robinson Fresh - Asparagus"
+  subject_patterns:
+    - "ROBINSON FRESH"
+  cutoff_hour: null
+  known_modes: [ocean, air]
+
+square_one:
+  display_name: "Square One"
+  aliases:
+    - "Square One"
+    - "SQUARE ONE"
+    - "Square One Farms"
+    - "SQUARE ONE FARMS"
+    - "Square One Farms, LLC"
+  subject_patterns:
+    - "SQUARE ONE"
+  cutoff_hour: null
+  known_modes: [ocean, air, repack, rejection]
+
+agropeppers:
+  display_name: "AgroPeppers USA"
+  aliases:
+    - "AgroPeppers USA"
+    - "AGROPEPPERS USA"
+    - "AgroPeppers"
+    - "AGROPEPPERS"
+  subject_patterns:
+    - "AGROPEPPERS"
+    - "AGRO PEPPERS"
+  cutoff_hour: null
+  known_modes: [ocean]
+
+harvest:
+  display_name: "Harvest"
+  aliases:
+    - "Harvest"
+    - "HARVEST"
+    - "Harvest Sensations"
+    - "HARVEST SENSATIONS"
+  subject_patterns:
+    - "HARVEST"
+  cutoff_hour: null
+  known_modes: [ocean]
+
+baja_son:
+  display_name: "Baja Son"
+  aliases:
+    - "Baja Son"
+    - "BAJA SON"
+    - "Baja Son Growers"
+    - "BAJA SON GROWERS"
+  subject_patterns:
+    - "BAJA SON"
+  cutoff_hour: null
+  known_modes: [ocean]
+
+nativa:
+  display_name: "Nativa"
+  aliases:
+    - "Nativa"
+    - "NATIVA"
+  subject_patterns:
+    - "NATIVA"
+  cutoff_hour: null
+  known_modes: [ocean, air]
+
+icon:
+  display_name: "ICON"
+  aliases:
+    - "ICON"
+    - "Icon"
+  subject_patterns:
+    - "ICON"
+  cutoff_hour: null
+  known_modes: [ocean, air]

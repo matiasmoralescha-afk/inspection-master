@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Environment & credentials
+.env
+.env.local
+credentials/
+
+# DB local
+*.db
+*.sqlite
+
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/.vercel/
+
+# OS
+.DS_Store

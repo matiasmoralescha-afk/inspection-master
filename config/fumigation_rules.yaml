@@ -1,0 +1,10 @@
+# commodity + country_of_origin combinations that ALWAYS require fumigation.
+# Only add entries confirmed by Matias — never infer.
+# Matching is case-insensitive on both fields.
+rules:
+  - commodity: asparagus
+    country_of_origin: peru
+    requires: true
+
+# Pending to confirm:
+# - Other commodity+country combos that require fumigation?

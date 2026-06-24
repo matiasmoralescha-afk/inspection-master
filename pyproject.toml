@@ -1,0 +1,26 @@
+[project]
+name = "inspection-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "google-auth>=2.0",
+    "google-auth-oauthlib>=1.0",
+    "google-api-python-client>=2.0",
+    "beautifulsoup4>=4.12",
+    "lxml>=4.9",
+    "anthropic>=0.40",
+    "gspread>=6.0",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "supabase>=2.0",
+]
+
+[project.scripts]
+inspection-agent = "agent.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
