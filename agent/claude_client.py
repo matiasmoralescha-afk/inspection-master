@@ -205,3 +205,59 @@ No explanation. Only JSON."""
             'warehouse_arrival_at': None,
             'fumigation_confirmed': False,
         }
+
+
+def extract_lots_from_pdf(pdf_bytes: bytes, client: Anthropic) -> Optional[str]:
+    """
+    Send a PDF attachment to Claude and extract lot/pallet review info.
+    Returns a JSON string (stored as lots_raw) or None on failure.
+    """
+    import base64
+    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode('utf-8')
+
+    try:
+        response = client.messages.create(
+            model=_MODEL_HAIKU,
+            max_tokens=1024,
+            messages=[{
+                'role': 'user',
+                'content': [
+                    {
+                        'type': 'document',
+                        'source': {
+                            'type': 'base64',
+                            'media_type': 'application/pdf',
+                            'data': pdf_b64,
+                        },
+                    },
+                    {
+                        'type': 'text',
+                        'text': (
+                            'This is an inspection PDF with lots/pallets to review. '
+                            'Extract every lot or pallet entry. '
+                            'Return ONLY a valid JSON array of objects, each with: '
+                            '"lot" (lot or pallet number/ID), '
+                            '"qty" (quantity or boxes if available, else null), '
+                            '"defects" (defect description, else null), '
+                            '"notes" (any additional notes, else null). '
+                            'No explanation, no markdown, only the JSON array.'
+                        ),
+                    },
+                ],
+            }],
+        )
+
+        text = response.content[0].text.strip()
+        if '```' in text:
+            for part in text.split('```'):
+                stripped = part.lstrip('json').strip()
+                if stripped.startswith('['):
+                    text = stripped
+                    break
+
+        json.loads(text)  # validate
+        return text
+
+    except Exception:
+        logger.exception('Failed to extract lots from PDF')
+        return None

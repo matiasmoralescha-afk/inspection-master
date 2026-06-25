@@ -61,6 +61,7 @@ create table if not exists shipments (
     comments_raw                    text,
     psi_file                        text,
     quantity_description            text,
+    lots_raw                        text,
 
     unique (lookup_key)
 );

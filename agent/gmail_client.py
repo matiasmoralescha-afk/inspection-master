@@ -102,6 +102,34 @@ def _extract_html_from_payload(payload: dict) -> Optional[str]:
     return None
 
 
+def get_attachments(service, message: dict, mime_types: tuple = ('application/pdf',)) -> list[dict]:
+    """
+    Return list of attachments matching mime_types.
+    Each item: {'filename': str, 'mime_type': str, 'data': bytes}
+    """
+    attachments = []
+    payload = message.get('payload', {})
+    message_id = message['id']
+
+    def _scan_parts(parts: list) -> None:
+        for part in parts:
+            mt = part.get('mimeType', '')
+            if mt in mime_types:
+                attachment_id = part.get('body', {}).get('attachmentId')
+                filename = part.get('filename', 'attachment')
+                if attachment_id:
+                    resp = service.users().messages().attachments().get(
+                        userId='me', messageId=message_id, id=attachment_id
+                    ).execute()
+                    data = base64.urlsafe_b64decode(resp['data'])
+                    attachments.append({'filename': filename, 'mime_type': mt, 'data': data})
+            if part.get('parts'):
+                _scan_parts(part['parts'])
+
+    _scan_parts(payload.get('parts', []))
+    return attachments
+
+
 def get_message_date(message: dict) -> Optional[str]:
     """Return ISO datetime string from internalDate (milliseconds UTC)."""
     internal_date = message.get('internalDate')

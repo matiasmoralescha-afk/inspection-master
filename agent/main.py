@@ -67,7 +67,7 @@ def _get_msg_header(msg: dict, name: str) -> str:
 
 
 def _classify_message(msg: dict) -> str:
-    """Return 'ocean_update', 'air_arrival', 'inspection_report', or 'unknown'."""
+    """Return 'ocean_update', 'air_arrival', 'inspection_report', 'sq1_receiving_card', or 'unknown'."""
     sender  = _get_msg_header(msg, 'From').lower()
     subject = _get_msg_header(msg, 'Subject')
     subject_upper = subject.upper()
@@ -78,6 +78,8 @@ def _classify_message(msg: dict) -> str:
         return 'ocean_update'
     if 'AIR ARRIVAL' in subject_upper:
         return 'air_arrival'
+    if 'SQ1' in subject_upper and 'INSPECTION REQUEST' in subject_upper:
+        return 'sq1_receiving_card'
     return 'unknown'
 
 
@@ -315,12 +317,16 @@ def main() -> None:
         'AIR_ARRIVALS_QUERY',
         'subject:"AIR ARRIVALS" newer_than:7d',
     ))
+    sq1_query = _apply_time_window(os.environ.get(
+        'SQ1_RECEIVING_CARD_QUERY',
+        'subject:"SQ1 Inspection Request" newer_than:7d',
+    ))
 
     logger.info('Ocean query: %s', ocean_query)
     logger.info('Air arrivals query: %s', air_query)
     logger.info('Inspection report query: %s', ir_query)
 
-    threads = _collect_threads(service, [ocean_query, air_query, ir_query])
+    threads = _collect_threads(service, [ocean_query, air_query, sq1_query, ir_query])
     logger.info('Total unique threads: %d', len(threads))
 
     stats = {
@@ -363,10 +369,22 @@ def main() -> None:
                 if record is None:
                     stats['rows_skipped'] += 1
                 else:
+                    # Square One attaches a PDF with lots to review
+                    if record.get('cliente') == 'Square One':
+                        attachments = gmail_client.get_attachments(service, msg)
+                        for att in attachments:
+                            lots = claude_client.extract_lots_from_pdf(att['data'], anthropic)
+                            if lots:
+                                record['lots_raw'] = lots
+                                logger.info('Extracted lots from PDF for %s / %s',
+                                            record.get('cliente'), record.get('po'))
+                                break
+
                     if args.dry_run:
-                        logger.info('[DRY-RUN] Inspection report: client=%s po=%s container=%s grade=%s',
+                        logger.info('[DRY-RUN] Inspection report: client=%s po=%s container=%s grade=%s lots=%s',
                                     record.get('cliente'), record.get('po'),
-                                    record.get('unit_id'), record.get('overall_grade'))
+                                    record.get('unit_id'), record.get('overall_grade'),
+                                    record.get('lots_raw', '')[:60] or '—')
                         stats['inspection_inserted'] += 1
                     else:
                         result = db_mod.upsert_shipment(conn, record)
@@ -500,6 +518,43 @@ def main() -> None:
                                     conn, saved['id'],
                                     {'dia_disponible_para_inspeccion': dia},
                                 )
+
+            elif email_type == 'sq1_receiving_card':
+                attachments = gmail_client.get_attachments(service, msg)
+                pdfs = [a for a in attachments if a['mime_type'] == 'application/pdf']
+                if not pdfs:
+                    logger.debug('SQ1 Inspection Request has no PDF attachments: %s', message_id)
+                else:
+                    for att in pdfs:
+                        # Extract lot/PO from filename: "RECEIVING CARD DOL-2726.pdf" → "DOL-2726"
+                        fn_match = re.search(
+                            r'RECEIVING\s+CARD\s+(.+?)(?:\s+REVISED)?\.pdf',
+                            att['filename'], re.IGNORECASE,
+                        )
+                        if not fn_match:
+                            logger.warning('Could not parse lot from PDF filename: %s', att['filename'])
+                            continue
+                        lot_raw = fn_match.group(1).strip()
+                        po_norm = normalizers.normalize_po(lot_raw)
+
+                        lots_json = claude_client.extract_lots_from_pdf(att['data'], anthropic)
+                        if not lots_json:
+                            logger.warning('Could not extract lots from %s', att['filename'])
+                            continue
+
+                        if args.dry_run:
+                            logger.info('[DRY-RUN] SQ1 receiving card: lot=%s po_norm=%s lots=%s',
+                                        lot_raw, po_norm, lots_json[:80])
+                        else:
+                            updated = conn.execute(
+                                "UPDATE shipments SET lots_raw=? WHERE po_norm=? AND cliente_norm='SQUARE ONE'",
+                                (lots_json, po_norm),
+                            ).rowcount
+                            conn.commit()
+                            if updated:
+                                logger.info('Updated lots_raw for SQ1 lot %s (%s rows)', lot_raw, updated)
+                            else:
+                                logger.warning('No shipment found for SQ1 lot %s (po_norm=%s)', lot_raw, po_norm)
 
             else:
                 logger.debug('Unknown email type for message %s (subject: %r)', message_id, subject)

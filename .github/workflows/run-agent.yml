@@ -36,5 +36,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OCEAN_UPDATE_QUERY: '(subject:"OCEAN REPORT" OR subject:"OCEAN UPDATE") newer_than:7d'
+          AIR_ARRIVALS_QUERY: 'subject:"AIR ARRIVALS" newer_than:7d'
+          SQ1_RECEIVING_CARD_QUERY: 'subject:"SQ1 Inspection Request" newer_than:7d'
           INSPECTION_REPORT_QUERY: 'from:reports@eliteqa.app newer_than:7d'
         run: python -m agent.main --since-hours 4
