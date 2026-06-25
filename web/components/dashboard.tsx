@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Shipment, DbNotification } from '@/lib/types'
+import type { Shipment, DbNotification, Staff } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 
 // ─── toast notifications ─────────────────────────────────────────────────────
@@ -196,6 +196,13 @@ const COLUMNS: Col[] = [
     key: 'reinspection_due_date', label: 'Reinsp.', defaultVisible: true,
     getValue: s => s.reinspection_due_date ?? '',
     render: s => <ReinspCell date={s.reinspection_due_date} estado={s.estado_general} />,
+  },
+  {
+    key: 'inspector', label: 'Inspector', defaultVisible: false,
+    getValue: s => s.inspector_id ? 'asignado' : '',
+    render: s => s.inspector_id
+      ? <span className="inline-flex items-center gap-1 text-[13px] text-slate-600"><span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block shrink-0" />Asignado</span>
+      : <span className="text-slate-300 text-[13px]">—</span>,
   },
   {
     key: 'estado_general', label: 'Status', defaultVisible: true,
@@ -492,6 +499,9 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: () => void }) {
             </section>
           )}
 
+          {/* inspector assignment */}
+          <InspectorDropdown shipment={s} />
+
           {/* comments */}
           {s.comments_raw && (
             <section className="border-t border-slate-100 pt-4">
@@ -510,6 +520,136 @@ function DetailKV({ label, value }: { label: string; value: string | null | unde
     <div>
       <dt className="text-[11px] text-slate-400">{label}</dt>
       <dd className="text-[13px] text-slate-800 mt-0.5">{value || '—'}</dd>
+    </div>
+  )
+}
+
+function InspectorDropdown({ shipment }: { shipment: Shipment }) {
+  const [staff, setStaff] = useState<Staff[]>([])
+  const [inspectorId, setInspectorId] = useState<number | null>(shipment.inspector_id)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    supabase
+      .from('staff')
+      .select('id, name, role, zone, active, whatsapp, email, clients_assigned, created_at')
+      .eq('role', 'inspector')
+      .eq('active', 1)
+      .order('name')
+      .then(({ data }) => setStaff((data ?? []) as Staff[]))
+  }, [])
+
+  async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const val = e.target.value ? Number(e.target.value) : null
+    setSaving(true)
+    await supabase.from('shipments').update({ inspector_id: val }).eq('id', shipment.id)
+    setInspectorId(val)
+    setSaving(false)
+  }
+
+  return (
+    <div className="border-t border-slate-100 pt-4">
+      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Inspector</p>
+      <select
+        value={inspectorId ?? ''}
+        onChange={handleChange}
+        disabled={saving}
+        className="w-full text-[13px] border border-slate-200 rounded-md px-2.5 py-1.5 text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+      >
+        <option value="">Sin asignar</option>
+        {staff.map(m => (
+          <option key={m.id} value={m.id}>
+            {m.name}{m.zone ? ` (${m.zone})` : ''}
+          </option>
+        ))}
+      </select>
+      {saving && <p className="text-[11px] text-slate-400 mt-1">Guardando…</p>}
+    </div>
+  )
+}
+
+function NotificationBell() {
+  const [open, setOpen] = useState(false)
+  const [history, setHistory] = useState<DbNotification[]>([])
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    supabase
+      .from('notifications')
+      .select('*')
+      .order('sent_at', { ascending: false })
+      .limit(20)
+      .then(({ data }) => setHistory((data ?? []) as DbNotification[]))
+  }, [])
+
+  // Refresh list when panel opens
+  function handleOpen() {
+    setOpen(o => !o)
+    supabase
+      .from('notifications')
+      .select('*')
+      .order('sent_at', { ascending: false })
+      .limit(20)
+      .then(({ data }) => setHistory((data ?? []) as DbNotification[]))
+  }
+
+  useEffect(() => {
+    function h(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  const today = new Date().toISOString().slice(0, 10)
+  const todayCount = history.filter(n => n.sent_at.slice(0, 10) === today).length
+
+  const eventIcon = (t: DbNotification['event_type']) =>
+    t === 'ready_for_inspection' ? '🟢' :
+    t === 'report_received'      ? '✅' :
+    t === 'reinspection_due'     ? '⚠️' : '🔴'
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={handleOpen}
+        className="relative p-1 rounded text-slate-500 hover:text-white transition-colors"
+        title="Notificaciones"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+        </svg>
+        {todayCount > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-red-500 text-[9px] font-bold text-white flex items-center justify-center leading-none">
+            {todayCount > 9 ? '9+' : todayCount}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg w-80">
+          <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
+            <p className="text-[12px] font-semibold text-slate-700">Notificaciones</p>
+            {todayCount > 0 && (
+              <span className="text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">{todayCount} hoy</span>
+            )}
+          </div>
+          <div className="max-h-72 overflow-y-auto divide-y divide-slate-50">
+            {history.length === 0 ? (
+              <p className="py-8 text-center text-[13px] text-slate-400">Sin notificaciones</p>
+            ) : history.map(n => (
+              <div key={n.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-slate-50">
+                <span className="text-base leading-none mt-0.5 shrink-0">{eventIcon(n.event_type)}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[12px] text-slate-700 leading-snug">{n.message}</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">{timeAgo(n.sent_at)}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -713,11 +853,13 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
           </svg>
         </SidebarIcon>
 
-        <SidebarIcon>
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-          </svg>
-        </SidebarIcon>
+        <a href="/staff">
+          <SidebarIcon>
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+            </svg>
+          </SidebarIcon>
+        </a>
 
         <SidebarIcon>
           <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -759,6 +901,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
               <span className="text-slate-500">Actualizado {timeAgo(lastUpdateIso)}</span>
             )}
           </div>
+          <NotificationBell />
           <button
             onClick={handleRefresh}
             disabled={refreshing}

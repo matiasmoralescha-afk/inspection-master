@@ -681,7 +681,7 @@ def main() -> None:
             "SELECT * FROM shipments WHERE estado_general = 'abierto'"
         ).fetchall()
         for row in open_shipments:
-            notif.check_and_notify(dict(row), dict(row), conn, service)
+            notif.check_and_notify(dict(row), None, conn, service)
 
     # Sync to Sheets + Supabase (non-fatal)
     if not args.dry_run:

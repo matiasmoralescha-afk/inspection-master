@@ -218,22 +218,21 @@ def check_and_notify(
     today = date.today().isoformat()
     events_to_check: list[str] = []
 
-    # 1. ready_for_inspection — flipped from 0 to 1
-    prev_ready = (prev_state or {}).get('ready_for_inspection', 0)
-    if shipment.get('ready_for_inspection') == 1 and prev_ready != 1:
-        events_to_check.append('ready_for_inspection')
+    # Transition events — only fire when we have a previous state to compare against
+    if prev_state is not None:
+        prev_ready = prev_state.get('ready_for_inspection', 0)
+        if shipment.get('ready_for_inspection') == 1 and prev_ready != 1:
+            events_to_check.append('ready_for_inspection')
 
-    # 2. report_received — report_sent flipped to 1
-    prev_report = (prev_state or {}).get('report_sent', 0)
-    if shipment.get('report_sent') == 1 and prev_report != 1:
-        events_to_check.append('report_received')
+        prev_report = prev_state.get('report_sent', 0)
+        if shipment.get('report_sent') == 1 and prev_report != 1:
+            events_to_check.append('report_received')
 
-    # 3. reinspection_due — due date is today or past, still abierto
+    # Persistent-state events — checked on every run (daily scan + live upserts)
     reinsp_due = shipment.get('reinspection_due_date')
     if reinsp_due and reinsp_due <= today and shipment.get('estado_general') == 'abierto':
         events_to_check.append('reinspection_due')
 
-    # 4. eta_overdue — ETA passed, still abierto, no inspection report yet
     eta = shipment.get('eta_fecha')
     if (
         eta
