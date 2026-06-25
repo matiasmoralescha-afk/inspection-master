@@ -17,6 +17,7 @@ create table if not exists shipments (
     -- Canonical fields
     cliente                         text not null,
     tipo_carga                      text not null default 'ocean',
+    location                        text,           -- Miami | Texas | Los Angeles
     po                              text,
     unit_id                         text,
     shipper                         text,
@@ -43,6 +44,7 @@ create table if not exists shipments (
     requiere_fumigacion             integer,
     ready_for_inspection            integer not null default 0,
     dia_disponible_para_inspeccion  text,
+    reinspection_due_date           text,   -- Altar TX: report_date + 4 days
 
     -- Inspection (from reports@eliteqa.app)
     inspection_status               text not null default 'pendiente',
@@ -55,6 +57,9 @@ create table if not exists shipments (
 
     estado_general                  text not null default 'abierto',
 
+    -- Staff
+    inspector_id                    bigint references staff(id),
+
     -- Meta
     ultima_actualizacion            text not null,
     fuente                          text,
@@ -66,9 +71,36 @@ create table if not exists shipments (
     unique (lookup_key)
 );
 
+create table if not exists staff (
+    id          bigint generated always as identity primary key,
+    name        text not null,
+    role        text not null check (role in ('inspector', 'editor', 'coordinator')),
+    zone        text,               -- Miami | McAllen | Calexico | Los Angeles | Texas
+    whatsapp    text,
+    email       text,
+    active      integer not null default 1,
+    clients_assigned text,          -- JSON array: ["Alpine", "Fresh Way"]
+    created_at  timestamptz not null default now()
+);
+
+alter table staff disable row level security;
+
 create index if not exists idx_shipments_cliente_unit on shipments (cliente_norm, unit_id_norm);
 create index if not exists idx_shipments_cliente_po on shipments (cliente_norm, po_norm);
 create index if not exists idx_shipments_estado on shipments (estado_general);
+
+create table if not exists notifications (
+    id          bigint generated always as identity primary key,
+    shipment_id bigint references shipments(id),
+    event_type  text not null,  -- ready_for_inspection | reinspection_due | report_received | eta_overdue
+    sent_at     timestamptz not null default now(),
+    channels    text,           -- JSON: ["email","whatsapp","push"]
+    message     text,
+    -- Dedup: one notification per shipment+event per day
+    unique (shipment_id, event_type, (sent_at::date))
+);
+
+alter table notifications disable row level security;
 
 create table if not exists processed_messages (
     message_id   text primary key,

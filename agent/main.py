@@ -27,8 +27,10 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 from agent import gmail_client, db as db_mod, sheets_sync, supabase_sync, normalizers, claude_client, business_rules
+from agent import notifications as notif
 from agent.parsers import ocean as ocean_parser
 from agent.parsers import inspection_report as ir_parser
+from agent.parsers import prime_time_pl as pl_parser
 
 load_dotenv()
 
@@ -67,7 +69,8 @@ def _get_msg_header(msg: dict, name: str) -> str:
 
 
 def _classify_message(msg: dict) -> str:
-    """Return 'ocean_update', 'air_arrival', 'inspection_report', 'sq1_receiving_card', or 'unknown'."""
+    """Return 'ocean_update', 'air_arrival', 'inspection_report',
+    'sq1_receiving_card', 'prime_time_pl', or 'unknown'."""
     sender  = _get_msg_header(msg, 'From').lower()
     subject = _get_msg_header(msg, 'Subject')
     subject_upper = subject.upper()
@@ -80,6 +83,8 @@ def _classify_message(msg: dict) -> str:
         return 'air_arrival'
     if 'SQ1' in subject_upper and 'INSPECTION REQUEST' in subject_upper:
         return 'sq1_receiving_card'
+    if pl_parser.is_prime_time_pl(subject):
+        return 'prime_time_pl'
     return 'unknown'
 
 
@@ -88,6 +93,34 @@ def _parse_int(s: Optional[str]) -> Optional[int]:
         return int(s) if s else None
     except (ValueError, TypeError):
         return None
+
+
+def _get_client_location(cliente: str, clients_config: dict) -> Optional[str]:
+    """Return the default location for a client from config (e.g. 'Miami', 'Texas')."""
+    for _key, cfg in clients_config.items():
+        if cfg['display_name'].lower() == cliente.lower():
+            return cfg.get('location')
+    return None
+
+
+def _fetch_shipment(conn, cliente_norm: str, unit_id_norm: Optional[str],
+                    po_norm: Optional[str]) -> Optional[dict]:
+    """Fetch current shipment row before upsert (for change detection)."""
+    if unit_id_norm:
+        row = conn.execute(
+            'SELECT * FROM shipments WHERE cliente_norm=? AND unit_id_norm=?',
+            (cliente_norm, unit_id_norm),
+        ).fetchone()
+        if row:
+            return dict(row)
+    if po_norm:
+        row = conn.execute(
+            'SELECT * FROM shipments WHERE cliente_norm=? AND po_norm=?',
+            (cliente_norm, po_norm),
+        ).fetchone()
+        if row:
+            return dict(row)
+    return None
 
 
 def build_record_from_ocean_row(
@@ -100,6 +133,7 @@ def build_record_from_ocean_row(
     fum_rules: list[dict],
     anthropic_client: Anthropic,
     tipo_carga: str = 'ocean',
+    clients_config: Optional[dict] = None,
 ) -> Optional[dict]:
     """Convert one parsed ocean table row into a canonical shipment record."""
     mapped: dict = {}
@@ -181,6 +215,7 @@ def build_record_from_ocean_row(
         'pallets':                  _parse_int(mapped.get('pallets')),
         'comments_raw':             comments_raw or None,
         'psi_file':                 mapped.get('psi_file'),
+        'location':                 _get_client_location(cliente, clients_config or {}),
         'fuente':                   f'{thread_id}:{message_id}',
     }
 
@@ -254,6 +289,7 @@ def build_record_from_inspection_report(
         'warehouse_arrival_at': report_date or message_date_iso,
         'ready_for_inspection': 1,
         'estado_general':   'cerrado',
+        'location':         _get_client_location(cliente, clients_config),
         'fuente':           f'{thread_id}:{message_id}',
     }
     return record
@@ -321,12 +357,17 @@ def main() -> None:
         'SQ1_RECEIVING_CARD_QUERY',
         'subject:"SQ1 Inspection Request" newer_than:7d',
     ))
+    pl_query = _apply_time_window(os.environ.get(
+        'PRIME_TIME_PL_QUERY',
+        'subject:PM- newer_than:30d',
+    ))
 
     logger.info('Ocean query: %s', ocean_query)
     logger.info('Air arrivals query: %s', air_query)
     logger.info('Inspection report query: %s', ir_query)
+    logger.info('Prime Time PL query: %s', pl_query)
 
-    threads = _collect_threads(service, [ocean_query, air_query, sq1_query, ir_query])
+    threads = _collect_threads(service, [ocean_query, air_query, sq1_query, ir_query, pl_query])
     logger.info('Total unique threads: %d', len(threads))
 
     stats = {
@@ -387,11 +428,30 @@ def main() -> None:
                                     record.get('lots_raw', '')[:60] or '—')
                         stats['inspection_inserted'] += 1
                     else:
+                        prev = _fetch_shipment(conn, record['cliente_norm'],
+                                               record.get('unit_id_norm'), record.get('po_norm'))
                         result = db_mod.upsert_shipment(conn, record)
                         if result == 'inserted':
                             stats['inspection_inserted'] += 1
                         else:
                             stats['inspection_updated'] += 1
+
+                        # After upsert, recalculate derived fields for this shipment
+                        saved = conn.execute(
+                            'SELECT * FROM shipments WHERE cliente_norm=? AND (unit_id_norm=? OR po_norm=?)',
+                            (record['cliente_norm'], record.get('unit_id_norm'), record.get('po_norm')),
+                        ).fetchone()
+                        if saved:
+                            derived = {}
+                            dia = business_rules.calc_dia_disponible(dict(saved), clients_config)
+                            if dia:
+                                derived['dia_disponible_para_inspeccion'] = dia
+                            reinsp = business_rules.calc_reinspection_due_date(dict(saved), clients_config)
+                            if reinsp:
+                                derived['reinspection_due_date'] = reinsp
+                            if derived:
+                                db_mod.update_derived_fields(conn, saved['id'], derived)
+                            notif.check_and_notify(dict(saved), prev, conn, service)
 
             elif email_type == 'ocean_update':
                 # Detect client from subject
@@ -427,6 +487,7 @@ def main() -> None:
                     record = build_record_from_ocean_row(
                         raw_row, field_mapping, cliente,
                         thread_id, message_id, message_date, fum_rules, anthropic,
+                        clients_config=clients_config,
                     )
                     if record is None:
                         stats['rows_skipped'] += 1
@@ -438,6 +499,8 @@ def main() -> None:
                                     {k: v for k, v in record.items() if v is not None})
                         stats['ocean_rows_inserted'] += 1
                     else:
+                        prev = _fetch_shipment(conn, record['cliente_norm'],
+                                               record.get('unit_id_norm'), record.get('po_norm'))
                         result = db_mod.upsert_shipment(conn, record)
                         if result == 'inserted':
                             stats['ocean_rows_inserted'] += 1
@@ -455,6 +518,7 @@ def main() -> None:
                                     conn, saved['id'],
                                     {'dia_disponible_para_inspeccion': dia},
                                 )
+                            notif.check_and_notify(dict(saved), prev, conn, service)
 
             elif email_type == 'air_arrival':
                 cliente = normalizers.detect_client_from_subject(subject, clients_config)
@@ -490,6 +554,7 @@ def main() -> None:
                         raw_row, field_mapping, cliente,
                         thread_id, message_id, message_date, fum_rules, anthropic,
                         tipo_carga='air',
+                        clients_config=clients_config,
                     )
                     if record is None:
                         stats['rows_skipped'] += 1
@@ -501,6 +566,8 @@ def main() -> None:
                                     {k: v for k, v in record.items() if v is not None})
                         stats['ocean_rows_inserted'] += 1
                     else:
+                        prev = _fetch_shipment(conn, record['cliente_norm'],
+                                               record.get('unit_id_norm'), record.get('po_norm'))
                         result = db_mod.upsert_shipment(conn, record)
                         if result == 'inserted':
                             stats['ocean_rows_inserted'] += 1
@@ -518,6 +585,7 @@ def main() -> None:
                                     conn, saved['id'],
                                     {'dia_disponible_para_inspeccion': dia},
                                 )
+                            notif.check_and_notify(dict(saved), prev, conn, service)
 
             elif email_type == 'sq1_receiving_card':
                 attachments = gmail_client.get_attachments(service, msg)
@@ -556,6 +624,49 @@ def main() -> None:
                             else:
                                 logger.warning('No shipment found for SQ1 lot %s (po_norm=%s)', lot_raw, po_norm)
 
+            elif email_type == 'prime_time_pl':
+                parsed_subj = pl_parser.parse_subject(subject)
+                if not parsed_subj:
+                    logger.warning('prime_time_pl: could not parse subject: %r', subject)
+                    stats['rows_skipped'] += 1
+                else:
+                    html = gmail_client.get_message_body(msg)
+                    parsed_body = pl_parser.parse_html(html or '')
+
+                    unit_id_norm = parsed_body.get('unit_id_norm')
+                    po_norm      = parsed_subj['po_norm']
+                    po           = parsed_subj['po']
+                    cliente_norm = normalizers.normalize_client_name('Prime Time')
+
+                    commodity_raw = parsed_body.get('commodity_raw')
+
+                    record: dict = {
+                        'cliente':       'Prime Time',
+                        'cliente_norm':  cliente_norm,
+                        'tipo_carga':    'ocean',
+                        'po':            po,
+                        'po_norm':       po_norm,
+                        'unit_id':       unit_id_norm,
+                        'unit_id_norm':  unit_id_norm,
+                        'lots_raw':      parsed_body.get('lots_raw'),
+                        'location':      _get_client_location('Prime Time', clients_config),
+                        'fuente':        f'{thread_id}:{message_id}',
+                    }
+                    if commodity_raw:
+                        record['commodity'] = normalizers.normalize_commodity(commodity_raw)
+
+                    if args.dry_run:
+                        logger.info('[DRY-RUN] Prime Time PL: pl=%s container=%s', po_norm, unit_id_norm or '?')
+                        stats['ocean_rows_updated'] += 1
+                    else:
+                        result = db_mod.upsert_shipment(conn, record)
+                        if result == 'inserted':
+                            logger.info('Prime Time PL: inserted new row for %s (no matching ocean update yet)', po_norm)
+                            stats['ocean_rows_inserted'] += 1
+                        else:
+                            logger.info('Prime Time PL: linked %s → container %s', po_norm, unit_id_norm or '?')
+                            stats['ocean_rows_updated'] += 1
+
             else:
                 logger.debug('Unknown email type for message %s (subject: %r)', message_id, subject)
                 stats['rows_skipped'] += 1
@@ -563,6 +674,14 @@ def main() -> None:
             if not args.dry_run:
                 db_mod.mark_processed(conn, message_id, thread_id)
                 conn.commit()
+
+    # Daily scan: notify for eta_overdue + reinspection_due across ALL open shipments
+    if not args.dry_run:
+        open_shipments = conn.execute(
+            "SELECT * FROM shipments WHERE estado_general = 'abierto'"
+        ).fetchall()
+        for row in open_shipments:
+            notif.check_and_notify(dict(row), dict(row), conn, service)
 
     # Sync to Sheets + Supabase (non-fatal)
     if not args.dry_run:

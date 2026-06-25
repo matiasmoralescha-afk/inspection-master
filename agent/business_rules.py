@@ -109,6 +109,31 @@ def calc_ready_for_inspection(shipment: dict, _clients_config: dict) -> bool:
     return True
 
 
+def calc_reinspection_due_date(shipment: dict, clients_config: dict) -> Optional[str]:
+    """
+    Altar TX rule: every 4-5 days from the Elite report_date.
+    Returns YYYY-MM-DD of the next reinspection due date, or None if not applicable.
+    Only applies to Altar Produce shipments that have a report_date.
+    """
+    cliente = shipment.get('cliente', '')
+    # Only Altar Produce
+    if 'altar' not in cliente.lower():
+        return None
+
+    report_date_str = shipment.get('report_date')
+    if not report_date_str:
+        return None
+
+    try:
+        report_dt = date.fromisoformat(report_date_str[:10])
+    except ValueError:
+        return None
+
+    # Due 4 days after the report (the window is 4-5 days, we alert at day 4)
+    due = report_dt + timedelta(days=4)
+    return due.isoformat()
+
+
 def calc_dia_disponible(shipment: dict, clients_config: dict) -> Optional[str]:
     """
     Section 4.5 — calculate dia_disponible_para_inspeccion applying cutoff rule.

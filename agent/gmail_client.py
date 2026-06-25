@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.send',   # needed for notification emails
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive',
 ]

@@ -1,17 +1,114 @@
 'use client'
 
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import type { Shipment } from '@/lib/types'
+import type { Shipment, DbNotification } from '@/lib/types'
+import { supabase } from '@/lib/supabase'
+
+// ─── toast notifications ─────────────────────────────────────────────────────
+
+type Toast = { id: number; event_type: DbNotification['event_type']; message: string }
+
+const EVENT_LABELS: Record<DbNotification['event_type'], string> = {
+  ready_for_inspection: '🟢 Listo para inspección',
+  report_received:      '✅ Reporte recibido',
+  reinspection_due:     '⚠️ Reinspección vence hoy',
+  eta_overdue:          '🔴 ETA pasada sin inspeccionar',
+}
+
+const EVENT_COLORS: Record<DbNotification['event_type'], string> = {
+  ready_for_inspection: 'border-l-emerald-500',
+  report_received:      'border-l-blue-500',
+  reinspection_due:     'border-l-amber-500',
+  eta_overdue:          'border-l-red-500',
+}
+
+function ToastList({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
+  if (toasts.length === 0) return null
+  return (
+    <div className="fixed bottom-5 right-5 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+      {toasts.map(t => (
+        <div
+          key={t.id}
+          className={`pointer-events-auto bg-white rounded-lg shadow-lg border border-slate-200 border-l-4 ${EVENT_COLORS[t.event_type]} px-4 py-3 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
+        >
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-semibold text-slate-800">{EVENT_LABELS[t.event_type]}</p>
+            <p className="text-[12px] text-slate-500 mt-0.5 truncate">{t.message}</p>
+          </div>
+          <button
+            onClick={() => onDismiss(t.id)}
+            className="text-slate-400 hover:text-slate-700 text-lg leading-none shrink-0 mt-0.5"
+          >✕</button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function useRealtimeNotifications() {
+  const [toasts, setToasts] = useState<Toast[]>([])
+
+  const dismiss = useCallback((id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id))
+  }, [])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('notifications-push')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications' },
+        (payload) => {
+          const n = payload.new as DbNotification
+          const toast: Toast = {
+            id:         n.id,
+            event_type: n.event_type,
+            message:    n.message ?? '',
+          }
+          setToasts(prev => [toast, ...prev].slice(0, 5))  // max 5 toasts
+          // Auto-dismiss after 8 seconds
+          setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toast.id)), 8000)
+        },
+      )
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [])
+
+  return { toasts, dismiss }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 function timeAgo(isoStr: string): string {
   const diff = Date.now() - new Date(isoStr).getTime()
   const mins = Math.floor(diff / 60000)
-  if (mins < 1) return 'hace un momento'
-  if (mins < 60) return `hace ${mins} min`
+  if (mins < 1) return 'ahora'
+  if (mins < 60) return `${mins}m`
   const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `hace ${hrs}h`
-  return `hace ${Math.floor(hrs / 24)}d`
+  if (hrs < 24) return `${hrs}h`
+  return `${Math.floor(hrs / 24)}d`
+}
+
+function effectiveDate(s: Shipment): string | null {
+  return s.dia_disponible_para_inspeccion ?? s.eta_fecha ?? null
+}
+
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const [y, m, d] = iso.split('-')
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  return `${months[+m - 1]} ${d}, ${y}`
+}
+
+function gradeColor(grade: string | null | undefined): string {
+  if (!grade) return 'text-slate-400'
+  if (grade.startsWith('A')) return 'text-emerald-600 font-semibold'
+  if (grade.startsWith('B')) return 'text-amber-500 font-semibold'
+  if (grade.startsWith('C')) return 'text-orange-500 font-semibold'
+  if (grade.startsWith('D')) return 'text-red-600 font-semibold'
+  return 'text-slate-600'
 }
 
 // ─── column definitions ──────────────────────────────────────────────────────
@@ -20,261 +117,399 @@ type Col = {
   key: string
   label: string
   defaultVisible: boolean
-  // raw string used for column-level filtering (null = not filterable)
   getValue: (s: Shipment) => string
-  // what renders inside the cell
   render: (s: Shipment) => React.ReactNode
-  thClass?: string
   tdClass?: string
 }
 
 const COLUMNS: Col[] = [
   {
-    key: 'cliente', label: 'Cliente', defaultVisible: true,
-    getValue: s => s.cliente ?? '',
-    render:   s => <span className="font-medium text-gray-900 whitespace-nowrap">{s.cliente}</span>,
-  },
-  {
-    key: 'unit_id', label: 'Container / AWB', defaultVisible: true,
-    getValue: s => s.unit_id ?? '',
-    render:   s => <span className="font-mono text-gray-700">{s.unit_id ?? '—'}</span>,
-  },
-  {
     key: 'po', label: 'PO', defaultVisible: true,
     getValue: s => s.po ?? '',
-    render:   s => <span className="font-mono text-gray-500">{s.po ?? '—'}</span>,
+    render: s => <span className="font-mono text-[13px] font-medium text-slate-900">{s.po ?? '—'}</span>,
+  },
+  {
+    key: 'unit_id', label: 'Container', defaultVisible: true,
+    getValue: s => s.unit_id ?? '',
+    render: s => <span className="font-mono text-[13px] text-slate-700">{s.unit_id ?? '—'}</span>,
   },
   {
     key: 'commodity', label: 'Commodity', defaultVisible: true,
     getValue: s => s.commodity ?? '',
-    render:   s => <>{s.commodity ?? '—'}</>,
+    render: s => <span className="text-[13px] text-slate-700">{s.commodity ?? '—'}</span>,
   },
   {
-    key: 'country_of_origin', label: 'País', defaultVisible: true,
-    getValue: s => s.country_of_origin ?? '',
-    render:   s => <>{s.country_of_origin ?? '—'}</>,
+    key: 'location', label: 'Location', defaultVisible: true,
+    getValue: s => s.location ?? '',
+    render: s => s.location
+      ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">{s.location}</span>
+      : <span className="text-slate-300">—</span>,
   },
   {
-    key: 'eta_fecha', label: 'ETA', defaultVisible: true,
-    getValue: s => s.eta_fecha ?? '',
-    render:   s => <EtaCell eta={s.eta_fecha} />,
-  },
-  {
-    key: 'shipper', label: 'Shipper', defaultVisible: true,
+    key: 'shipper', label: 'Warehouse', defaultVisible: true,
     getValue: s => s.shipper ?? '',
-    render:   s => <span className="max-w-[130px] truncate block text-gray-600">{s.shipper ?? '—'}</span>,
-    tdClass: 'max-w-[130px]',
+    render: s => <span className="text-[13px] text-slate-600 max-w-[160px] truncate block">{s.shipper ?? '—'}</span>,
+    tdClass: 'max-w-[160px]',
   },
   {
-    key: 'vessel', label: 'Buque', defaultVisible: false,
+    key: 'country_of_origin', label: 'Origin', defaultVisible: true,
+    getValue: s => s.country_of_origin ?? '',
+    render: s => <span className="text-[13px] text-slate-600">{s.country_of_origin ?? '—'}</span>,
+  },
+  {
+    key: 'cliente', label: 'Client', defaultVisible: true,
+    getValue: s => s.cliente ?? '',
+    render: s => <span className="text-[13px] text-slate-800">{s.cliente}</span>,
+  },
+  {
+    key: 'vessel', label: 'Carrier', defaultVisible: false,
     getValue: s => s.vessel ?? '',
-    render:   s => <span className="max-w-[130px] truncate block text-gray-600">{s.vessel ?? '—'}</span>,
-    tdClass: 'max-w-[130px]',
+    render: s => <span className="text-[13px] text-slate-500 uppercase tracking-wide">{s.vessel ? 'OCEAN' : '—'}</span>,
   },
   {
     key: 'bl', label: 'BL#', defaultVisible: false,
     getValue: s => s.bl ?? '',
-    render:   s => <span className="font-mono text-gray-600">{s.bl ?? '—'}</span>,
+    render: s => <span className="font-mono text-[12px] text-slate-500">{s.bl ?? '—'}</span>,
   },
   {
-    key: 'fda_status', label: 'FDA', defaultVisible: true,
-    getValue: s => s.fda_status ?? '',
-    render:   s => <StatusCell value={s.fda_status} />,
+    key: 'dia_disponible', label: 'Inspection Date', defaultVisible: true,
+    getValue: s => effectiveDate(s) ?? '',
+    render: s => <InspDateCell s={s} />,
   },
   {
-    key: 'agriculture_usda_status', label: 'USDA', defaultVisible: true,
-    getValue: s => s.agriculture_usda_status ?? '',
-    render:   s => <span className="max-w-[180px] truncate block"><StatusCell value={s.agriculture_usda_status} /></span>,
-    tdClass: 'max-w-[180px]',
-  },
-  {
-    key: 'customs_status', label: 'Customs', defaultVisible: true,
-    getValue: s => s.customs_status ?? '',
-    render:   s => <StatusCell value={s.customs_status} />,
-  },
-  {
-    key: 'fumigation_status', label: 'Fumigación', defaultVisible: false,
-    getValue: s => s.fumigation_status ?? '',
-    render:   s => <StatusCell value={s.fumigation_status} />,
-  },
-  {
-    key: 'warehouse_arrival_confirmed', label: 'Bodega', defaultVisible: true,
-    getValue: s => s.warehouse_arrival_confirmed ? 'sí' : 'no',
-    render:   s => s.warehouse_arrival_confirmed
-      ? <span className="text-green-600 font-bold">✓</span>
-      : <span className="text-gray-300">—</span>,
-    thClass: 'text-center', tdClass: 'text-center',
-  },
-  {
-    key: 'ready_for_inspection', label: 'Listo', defaultVisible: true,
-    getValue: s => s.ready_for_inspection ? 'sí' : 'no',
-    render:   s => s.ready_for_inspection && s.estado_general !== 'cerrado'
-      ? <span className="text-green-600 font-bold">✓</span>
-      : <span className="text-gray-300">—</span>,
-    thClass: 'text-center', tdClass: 'text-center',
+    key: 'pallets', label: 'Pallets', defaultVisible: true,
+    getValue: s => s.pallets != null ? String(s.pallets) : '',
+    render: s => <span className="text-[13px] text-slate-600">{s.pallets ?? '—'}</span>,
+    tdClass: 'text-right',
   },
   {
     key: 'overall_grade', label: 'Grade', defaultVisible: true,
     getValue: s => s.overall_grade ?? '',
-    render:   s => s.report_url
+    render: s => s.report_url
       ? <a href={s.report_url} target="_blank" rel="noopener noreferrer"
-           className={`${gradeColor(s.overall_grade)} hover:underline`}>
-          {s.overall_grade ?? 'Ver'}
+           className={`${gradeColor(s.overall_grade)} text-[13px] hover:underline`}>
+          {s.overall_grade ?? '—'}
         </a>
-      : <span className={gradeColor(s.overall_grade)}>{s.overall_grade ?? '—'}</span>,
+      : <span className={`text-[13px] ${gradeColor(s.overall_grade)}`}>{s.overall_grade ?? '—'}</span>,
   },
   {
-    key: 'pallets', label: 'Pallets', defaultVisible: false,
-    getValue: s => s.pallets != null ? String(s.pallets) : '',
-    render:   s => <>{s.pallets ?? '—'}</>,
-    thClass: 'text-right', tdClass: 'text-right',
+    key: 'reinspection_due_date', label: 'Reinsp.', defaultVisible: true,
+    getValue: s => s.reinspection_due_date ?? '',
+    render: s => <ReinspCell date={s.reinspection_due_date} estado={s.estado_general} />,
   },
   {
-    key: 'dia_disponible_para_inspeccion', label: 'Día Disp.', defaultVisible: true,
-    getValue: s => s.dia_disponible_para_inspeccion ?? '',
-    render:   s => <EtaCell eta={s.dia_disponible_para_inspeccion} />,
-  },
-  {
-    key: 'inspection_status', label: 'Inspección', defaultVisible: true,
-    getValue: s => s.inspection_status ?? '',
-    render:   s => <InspBadge status={s.inspection_status} />,
-  },
-  {
-    key: 'psi_file', label: 'PSI File', defaultVisible: false,
-    getValue: s => s.psi_file ?? '',
-    render:   s => <span className="font-mono text-gray-500 text-xs">{s.psi_file ?? '—'}</span>,
-  },
-  {
-    key: 'estado_general', label: 'Estado', defaultVisible: true,
+    key: 'estado_general', label: 'Status', defaultVisible: true,
     getValue: s => s.estado_general ?? '',
-    render:   s => <StateBadge state={s.estado_general} />,
+    render: s => <StatusBadge s={s} />,
   },
 ]
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── cell components ──────────────────────────────────────────────────────────
 
-function statusColor(val: string | null): string {
-  if (!val) return 'text-gray-400'
-  const v = val.toUpperCase()
-  if (v.includes('RELEASED') || v === 'ON TIME' || v.includes('CLEARED')) return 'text-green-700'
-  if (v.includes('HOLD') || v.includes('REJECT') || v.includes('FAILED')) return 'text-red-600'
-  if (v.includes('PENDING') || v.includes('FUMIGATION') || v.includes('SCH.')) return 'text-amber-600'
-  return 'text-gray-700'
-}
-
-function gradeColor(grade: string | null): string {
-  if (!grade) return 'text-gray-400'
-  if (grade.startsWith('A')) return 'text-green-700 font-bold'
-  if (grade.startsWith('B')) return 'text-amber-600 font-bold'
-  if (grade.startsWith('C')) return 'text-orange-600 font-bold'
-  if (grade.startsWith('D')) return 'text-red-600 font-bold'
-  return 'text-gray-700'
-}
-
-function EtaCell({ eta }: { eta: string | null }) {
-  if (!eta) return <span className="text-gray-400">—</span>
+function InspDateCell({ s }: { s: Shipment }) {
+  const eff = effectiveDate(s)
+  if (!eff) return <span className="text-slate-300 text-[13px]">—</span>
   const today = new Date().toISOString().slice(0, 10)
-  const [, m, d] = eta.split('-')
-  const label = `${m}/${d}`
-  if (eta < today) return <span className="text-red-500">{label}</span>
-  if (eta === today) return <span className="text-blue-600 font-bold">{label} ●</span>
-  return <span className="text-gray-800">{label}</span>
+  const label = fmtDate(eff)
+  if (eff < today)  return <span className="text-[13px] text-red-500 font-medium">{label}</span>
+  if (eff === today) return <span className="text-[13px] text-amber-600 font-semibold">{label} ●</span>
+  return <span className="text-[13px] text-slate-700">{label}</span>
 }
 
-function StatusCell({ value }: { value: string | null }) {
-  if (!value) return <span className="text-gray-300">—</span>
-  return <span className={`${statusColor(value)}`}>{value}</span>
+function ReinspCell({ date, estado }: { date: string | null; estado: string }) {
+  if (!date || estado === 'cerrado') return <span className="text-slate-300 text-[13px]">—</span>
+  const today = new Date().toISOString().slice(0, 10)
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
+  const label = fmtDate(date)
+  if (date < today)  return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-700">⚠ {label}</span>
+  if (date === today) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-600">HOY</span>
+  if (date === tomorrow) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-700">Mañana</span>
+  return <span className="text-[13px] text-slate-500">{label}</span>
 }
 
-function InspBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    pendiente:  'bg-gray-100 text-gray-500',
-    programada: 'bg-blue-100 text-blue-700',
-    completada: 'bg-green-100 text-green-700',
-    rechazada:  'bg-red-100 text-red-600',
+function StatusBadge({ s }: { s: Shipment }) {
+  if (s.estado_general === 'cerrado') {
+    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-500 uppercase tracking-wide">Done</span>
   }
-  return (
-    <span className={`px-1.5 py-0.5 rounded font-medium ${map[status] ?? 'bg-gray-100 text-gray-500'}`}>
-      {status}
-    </span>
-  )
+  if (s.ready_for_inspection === 1) {
+    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700 uppercase tracking-wide">Ready</span>
+  }
+  if (s.inspection_status === 'programada') {
+    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700 uppercase tracking-wide">Scheduled</span>
+  }
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700 uppercase tracking-wide">Pending</span>
 }
 
-function StateBadge({ state }: { state: string }) {
-  return (
-    <span className={`px-1.5 py-0.5 rounded font-medium ${
-      state === 'abierto' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'
-    }`}>
-      {state}
-    </span>
-  )
-}
+// ─── filter chip ──────────────────────────────────────────────────────────────
 
-// ─── column picker dropdown ───────────────────────────────────────────────────
-
-function ColPicker({
-  visible, onChange,
+function Chip({
+  label, value, options, onChange, isSearch = false,
 }: {
-  visible: Set<string>
-  onChange: (key: string, on: boolean) => void
+  label: string
+  value: string
+  options?: string[]
+  onChange: (v: string) => void
+  isSearch?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
+    function h(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [])
+
+  const isActive = !!value
+
+  if (isSearch) {
+    return (
+      <div className="relative flex items-center">
+        <svg className="absolute left-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
+        </svg>
+        <input
+          type="text"
+          placeholder={label}
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          className="pl-8 pr-3 py-1.5 text-[13px] border border-slate-200 rounded-full bg-white text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-44"
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-full border transition-colors ${
+          isActive
+            ? 'bg-slate-900 text-white border-slate-900'
+            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400 hover:text-slate-800'
+        }`}
+      >
+        {isActive ? `${label}: ${value}` : label}
+        <svg className="w-3 h-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && options && (
+        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+          <button
+            onClick={() => { onChange(''); setOpen(false) }}
+            className="w-full text-left px-3 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50"
+          >
+            Todos
+          </button>
+          {options.map(o => (
+            <button
+              key={o}
+              onClick={() => { onChange(o); setOpen(false) }}
+              className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-slate-50 ${
+                value === o ? 'text-slate-900 font-medium' : 'text-slate-600'
+              }`}
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── column picker ────────────────────────────────────────────────────────────
+
+function ColPicker({ visible, onChange }: { visible: Set<string>; onChange: (k: string, on: boolean) => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function h(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
   }, [])
 
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 border border-gray-200 rounded-md px-3 py-1.5 text-sm bg-white text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-full border border-slate-200 bg-white text-slate-600 hover:border-slate-400"
       >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-            d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+            d="M4 6h16M4 12h16M4 18h7" />
         </svg>
         Columnas
       </button>
-
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-52">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Mostrar columnas</p>
-          <div className="space-y-1 max-h-80 overflow-y-auto">
+        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg p-3 w-52">
+          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Mostrar columnas</p>
+          <div className="space-y-0.5 max-h-72 overflow-y-auto">
             {COLUMNS.map(col => (
-              <label key={col.key} className="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1">
+              <label key={col.key} className="flex items-center gap-2 py-1 px-1 cursor-pointer hover:bg-slate-50 rounded text-[13px] text-slate-700">
                 <input
                   type="checkbox"
                   checked={visible.has(col.key)}
                   onChange={e => onChange(col.key, e.target.checked)}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
                 />
-                <span className="text-sm text-gray-700">{col.label}</span>
+                {col.label}
               </label>
             ))}
           </div>
-          <div className="border-t border-gray-100 mt-2 pt-2 flex gap-2">
-            <button
-              onClick={() => COLUMNS.forEach(c => onChange(c.key, true))}
-              className="text-xs text-blue-600 hover:underline"
-            >
-              Mostrar todas
-            </button>
-            <span className="text-gray-300">·</span>
-            <button
-              onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))}
-              className="text-xs text-gray-500 hover:underline"
-            >
-              Reset
-            </button>
+          <div className="border-t border-slate-100 mt-2 pt-2 flex gap-2">
+            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, true))} className="text-[12px] text-blue-600 hover:underline">Todas</button>
+            <span className="text-slate-300">·</span>
+            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))} className="text-[12px] text-slate-400 hover:underline">Reset</button>
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── sidebar ──────────────────────────────────────────────────────────────────
+
+function SidebarIcon({ active, children }: { active?: boolean; children: React.ReactNode }) {
+  return (
+    <div className={`w-9 h-9 flex items-center justify-center rounded-lg cursor-pointer transition-colors ${
+      active ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white hover:bg-white/10'
+    }`}>
+      {children}
+    </div>
+  )
+}
+
+// ─── detail panel ─────────────────────────────────────────────────────────────
+
+function DetailPanel({ s, onClose }: { s: Shipment; onClose: () => void }) {
+  const today = new Date().toISOString().slice(0, 10)
+  const eff = effectiveDate(s)
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <div
+        className="w-full max-w-md bg-white shadow-2xl flex flex-col overflow-y-auto"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* header */}
+        <div className="bg-slate-900 px-5 py-4 flex items-start justify-between">
+          <div>
+            <p className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">{s.cliente}</p>
+            <h2 className="text-base font-bold text-white mt-0.5 font-mono">{s.unit_id ?? s.po ?? '—'}</h2>
+            {s.po && s.unit_id && <p className="text-[12px] text-slate-400 mt-0.5 font-mono">PO: {s.po}</p>}
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white text-lg leading-none mt-0.5">✕</button>
+        </div>
+
+        {/* status strip */}
+        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-3">
+          <StatusBadge s={s} />
+          {eff && (
+            <span className={`text-[13px] ${eff < today ? 'text-red-500 font-medium' : eff === today ? 'text-amber-600 font-semibold' : 'text-slate-500'}`}>
+              {eff === today ? 'Hoy — ' : ''}{fmtDate(eff)}
+            </span>
+          )}
+          {s.location && (
+            <span className="ml-auto text-[11px] font-medium bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{s.location}</span>
+          )}
+        </div>
+
+        {/* body */}
+        <div className="flex-1 px-5 py-4 space-y-5">
+          {/* shipment info */}
+          <section>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Envío</p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+              <DetailKV label="Commodity"   value={s.commodity} />
+              <DetailKV label="País origen" value={s.country_of_origin} />
+              <DetailKV label="Shipper"     value={s.shipper} />
+              <DetailKV label="ETA"         value={fmtDate(s.eta_fecha)} />
+              <DetailKV label="Día disp."   value={fmtDate(s.dia_disponible_para_inspeccion)} />
+              <DetailKV label="BL#"         value={s.bl} />
+              <DetailKV label="Buque"       value={s.vessel} />
+              <DetailKV label="Pallets"     value={s.pallets != null ? String(s.pallets) : null} />
+              {s.reinspection_due_date && (
+                <DetailKV label="Reinsp. due" value={fmtDate(s.reinspection_due_date)} />
+              )}
+            </dl>
+          </section>
+
+          {/* statuses */}
+          <section className="border-t border-slate-100 pt-4">
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Estatus aduanas</p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+              <DetailKV label="FDA"        value={s.fda_status} />
+              <DetailKV label="Customs"    value={s.customs_status} />
+              <DetailKV label="USDA"       value={s.agriculture_usda_status} />
+              <DetailKV label="Fumigación" value={s.fumigation_status} />
+            </dl>
+          </section>
+
+          {/* inspection results */}
+          {(s.overall_grade || s.condition_text || s.quality_text) && (
+            <section className="border-t border-slate-100 pt-4">
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Resultado</p>
+              {s.overall_grade && (
+                <p className={`text-2xl font-bold mb-2 ${gradeColor(s.overall_grade)}`}>Grade {s.overall_grade}</p>
+              )}
+              {s.condition_text && (
+                <div className="mb-2">
+                  <p className="text-[11px] text-slate-400 mb-0.5">Condición</p>
+                  <p className="text-[13px] text-slate-700 leading-relaxed">{s.condition_text}</p>
+                </div>
+              )}
+              {s.quality_text && (
+                <div className="mb-2">
+                  <p className="text-[11px] text-slate-400 mb-0.5">Calidad</p>
+                  <p className="text-[13px] text-slate-700 leading-relaxed">{s.quality_text}</p>
+                </div>
+              )}
+              {s.report_url && (
+                <a href={s.report_url} target="_blank" rel="noopener noreferrer"
+                   className="inline-flex items-center gap-1 text-[13px] text-blue-600 hover:underline mt-1">
+                  Ver reporte completo
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </a>
+              )}
+            </section>
+          )}
+
+          {/* lots */}
+          {s.lots_raw && (
+            <section className="border-t border-slate-100 pt-4">
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Lots</p>
+              <pre className="text-[12px] text-slate-700 bg-slate-50 rounded-md p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{s.lots_raw}</pre>
+            </section>
+          )}
+
+          {/* comments */}
+          {s.comments_raw && (
+            <section className="border-t border-slate-100 pt-4">
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Comentarios</p>
+              <p className="text-[13px] text-slate-700 leading-relaxed whitespace-pre-wrap">{s.comments_raw}</p>
+            </section>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DetailKV({ label, value }: { label: string; value: string | null | undefined }) {
+  return (
+    <div>
+      <dt className="text-[11px] text-slate-400">{label}</dt>
+      <dd className="text-[13px] text-slate-800 mt-0.5">{value || '—'}</dd>
     </div>
   )
 }
@@ -288,21 +523,21 @@ type SortState = { key: string; dir: 'asc' | 'desc' } | null
 export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const router = useRouter()
   const [refreshing, setRefreshing] = useState(false)
+  const { toasts, dismiss } = useRealtimeNotifications()
 
-  // global filters (top bar)
-  const [search, setSearch]             = useState('')
-  const [filterCliente, setCliente]     = useState('')
-  const [filterEstado, setEstado]       = useState('abierto')
-  const [filterCommodity, setCommodity] = useState('')
+  // filters
+  const [search,         setSearch]         = useState('')
+  const [filterCliente,  setCliente]        = useState('')
+  const [filterEstado,   setEstado]         = useState('abierto')
+  const [filterCommodity,setCommodity]      = useState('')
+  const [filterLocation, setLocation]       = useState('')
+  const [filterHoy,      setFilterHoy]      = useState(false)
 
-  // column visibility
+  // ui state
   const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
-
-  // per-column filters
-  const [colFilters, setColFilters] = useState<Record<string, string>>({})
-
-  // sort
-  const [sort, setSort] = useState<SortState>(null)
+  const [colFilters,  setColFilters]  = useState<Record<string, string>>({})
+  const [sort,        setSort]        = useState<SortState>(null)
+  const [selected,    setSelected]    = useState<Shipment | null>(null)
 
   function handleSort(key: string) {
     setSort(prev => {
@@ -318,29 +553,53 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     setTimeout(() => setRefreshing(false), 1500)
   }
 
+  function toggleCol(key: string, on: boolean) {
+    setVisibleCols(prev => {
+      const next = new Set(prev)
+      on ? next.add(key) : next.delete(key)
+      return next
+    })
+  }
+
   const visibleColumns = useMemo(
     () => COLUMNS.filter(c => visibleCols.has(c.key)),
     [visibleCols],
   )
 
-  // unique values per column — cascading:
-  // each column's options come from rows that pass ALL other active filters,
-  // so selecting "Alpine Fresh" narrows down Container, Commodity, FDA, etc.
+  // unique lists for filter chips
+  const clientes = useMemo(() => [...new Set(shipments.map(s => s.cliente))].sort(), [shipments])
+  const commodities = useMemo(() => [...new Set(shipments.map(s => s.commodity).filter(Boolean) as string[])].sort(), [shipments])
+  const locations = useMemo(() => [...new Set(shipments.map(s => s.location).filter(Boolean) as string[])].sort(), [shipments])
+
+  // stats
+  const stats = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10)
+    return {
+      total:    shipments.length,
+      abiertos: shipments.filter(s => s.estado_general === 'abierto').length,
+      listos:   shipments.filter(s => s.ready_for_inspection === 1 && s.estado_general === 'abierto').length,
+      cerrados: shipments.filter(s => s.estado_general === 'cerrado').length,
+      paraHoy:  shipments.filter(s => {
+        if (s.estado_general !== 'abierto') return false
+        const eff = effectiveDate(s)
+        return eff != null && eff <= today
+      }).length,
+    }
+  }, [shipments])
+
+  // cascading column options
   const colOptions = useMemo(() => {
     const opts: Record<string, string[]> = {}
     for (const col of COLUMNS) {
       const rows = shipments.filter(s => {
-        // global bar filters
-        if (filterCliente && s.cliente !== filterCliente) return false
-        if (filterEstado && s.estado_general !== filterEstado) return false
+        if (filterCliente  && s.cliente !== filterCliente) return false
+        if (filterEstado   && s.estado_general !== filterEstado) return false
         if (filterCommodity && s.commodity !== filterCommodity) return false
+        if (filterLocation && s.location !== filterLocation) return false
         if (search) {
           const q = search.toLowerCase()
-          const hay = [s.unit_id, s.po, s.shipper, s.vessel, s.commodity, s.psi_file]
-            .join(' ').toLowerCase()
-          if (!hay.includes(q)) return false
+          if (![s.unit_id, s.po, s.shipper, s.cliente, s.commodity].join(' ').toLowerCase().includes(q)) return false
         }
-        // per-column filters — skip this column's own filter
         for (const other of COLUMNS) {
           if (other.key === col.key) continue
           const fv = colFilters[other.key]
@@ -351,17 +610,9 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       opts[col.key] = [...new Set(rows.map(s => col.getValue(s)).filter(Boolean))].sort()
     }
     return opts
-  }, [shipments, search, filterCliente, filterEstado, filterCommodity, colFilters])
+  }, [shipments, search, filterCliente, filterEstado, filterCommodity, filterLocation, colFilters])
 
-  function toggleCol(key: string, on: boolean) {
-    setVisibleCols(prev => {
-      const next = new Set(prev)
-      on ? next.add(key) : next.delete(key)
-      return next
-    })
-  }
-
-  // when a column's selected value is no longer available (cascaded out), clear it
+  // clear cascaded-out col filters
   useEffect(() => {
     setColFilters(prev => {
       const next = { ...prev }
@@ -377,152 +628,215 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     })
   }, [colOptions])
 
-  const clientes = useMemo(
-    () => [...new Set(shipments.map(s => s.cliente))].sort(),
-    [shipments],
-  )
-  const commodities = useMemo(
-    () => [...new Set(shipments.map(s => s.commodity).filter(Boolean) as string[])].sort(),
-    [shipments],
-  )
-
+  // filtered rows
   const baseFiltered = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10)
     const q = search.toLowerCase()
     return shipments.filter(s => {
-      // global bar filters
-      if (filterCliente && s.cliente !== filterCliente) return false
-      if (filterEstado && s.estado_general !== filterEstado) return false
+      if (filterCliente  && s.cliente !== filterCliente) return false
+      if (filterEstado   && s.estado_general !== filterEstado) return false
       if (filterCommodity && s.commodity !== filterCommodity) return false
+      if (filterLocation && s.location !== filterLocation) return false
+      if (filterHoy) {
+        if (s.estado_general !== 'abierto') return false
+        const eff = effectiveDate(s)
+        if (!eff || eff > today) return false
+      }
       if (q) {
-        const hay = [s.unit_id, s.po, s.shipper, s.vessel, s.commodity, s.psi_file]
-          .join(' ').toLowerCase()
+        const hay = [s.unit_id, s.po, s.shipper, s.cliente, s.commodity, s.vessel].join(' ').toLowerCase()
         if (!hay.includes(q)) return false
       }
-      // per-column filters — exact match against selected value
       for (const col of COLUMNS) {
         const fv = colFilters[col.key]
-        if (!fv) continue
-        if (col.getValue(s) !== fv) return false
+        if (fv && col.getValue(s) !== fv) return false
       }
       return true
     })
-  }, [shipments, search, filterCliente, filterEstado, filterCommodity, colFilters])
+  }, [shipments, search, filterCliente, filterEstado, filterCommodity, filterLocation, filterHoy, colFilters])
 
   const filtered = useMemo(() => {
-    if (!sort) return baseFiltered
-    const col = COLUMNS.find(c => c.key === sort.key)
-    if (!col) return baseFiltered
+    if (sort) {
+      const col = COLUMNS.find(c => c.key === sort.key)
+      if (!col) return baseFiltered
+      return [...baseFiltered].sort((a, b) => {
+        const va = col.getValue(a), vb = col.getValue(b)
+        if (va === vb) return 0
+        if (!va) return 1; if (!vb) return -1
+        const cmp = va.localeCompare(vb, undefined, { numeric: true })
+        return sort.dir === 'asc' ? cmp : -cmp
+      })
+    }
+    // default: sort by effective inspection date asc, ready first within same date
     return [...baseFiltered].sort((a, b) => {
-      const va = col.getValue(a)
-      const vb = col.getValue(b)
-      if (va === vb) return 0
-      if (!va) return 1
-      if (!vb) return -1
-      const cmp = va.localeCompare(vb, undefined, { numeric: true })
-      return sort.dir === 'asc' ? cmp : -cmp
+      const da = effectiveDate(a), db = effectiveDate(b)
+      if (da === db) return (b.ready_for_inspection ?? 0) - (a.ready_for_inspection ?? 0)
+      if (!da) return 1; if (!db) return -1
+      return da.localeCompare(db)
     })
   }, [baseFiltered, sort])
 
-  const hasColFilters = Object.values(colFilters).some(Boolean)
-
-  const stats = {
-    total:    shipments.length,
-    abiertos: shipments.filter(s => s.estado_general === 'abierto').length,
-    listos:   shipments.filter(s => s.ready_for_inspection === 1 && s.estado_general === 'abierto').length,
-    cerrados: shipments.filter(s => s.estado_general === 'cerrado').length,
-  }
-
   const lastUpdateIso = shipments.length
-    ? shipments.reduce((a, b) =>
-        a.ultima_actualizacion > b.ultima_actualizacion ? a : b
-      ).ultima_actualizacion
+    ? shipments.reduce((a, b) => a.ultima_actualizacion > b.ultima_actualizacion ? a : b).ultima_actualizacion
     : null
 
+  const anyFilter = search || filterCliente || (filterEstado && filterEstado !== 'abierto') || filterCommodity || filterLocation || filterHoy || Object.values(colFilters).some(Boolean)
+
+  function clearAll() {
+    setSearch(''); setCliente(''); setEstado('abierto')
+    setCommodity(''); setLocation(''); setFilterHoy(false); setColFilters({})
+  }
+
+  // ─── render ───────────────────────────────────────────────────────────────
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* ── Header ── */}
-      <header className="bg-gray-900 text-white px-6 py-4 shadow-lg">
-        <div className="max-w-screen-2xl mx-auto flex items-start justify-between gap-6">
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">Inspection Master</h1>
+    <div className="flex h-screen bg-slate-100 overflow-hidden font-sans">
+
+      {/* ── Sidebar ── */}
+      <nav className="w-14 bg-slate-900 flex flex-col items-center py-3 gap-1 shrink-0">
+        <div className="mb-3">
+          <SidebarIcon>
+            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+            </svg>
+          </SidebarIcon>
+        </div>
+
+        <SidebarIcon active>
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
+          </svg>
+        </SidebarIcon>
+
+        <SidebarIcon>
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+          </svg>
+        </SidebarIcon>
+
+        <SidebarIcon>
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+          </svg>
+        </SidebarIcon>
+
+        <SidebarIcon>
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" />
+          </svg>
+        </SidebarIcon>
+
+        <SidebarIcon>
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+          </svg>
+        </SidebarIcon>
+
+        <div className="flex-1" />
+
+        <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-[11px] font-bold mb-1">
+          MM
+        </div>
+      </nav>
+
+      {/* ── Main area ── */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* ── Top bar ── */}
+        <div className="h-10 bg-slate-900 border-b border-slate-800 flex items-center px-4 gap-4 shrink-0">
+          <div className="flex items-center gap-2 text-slate-400 text-[13px]">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
+            </svg>
+            <span className="text-slate-500">Buscar...</span>
+          </div>
+          <div className="flex-1" />
+          {/* stats pills */}
+          <div className="flex items-center gap-4 text-[12px]">
+            <span className="text-slate-400">{stats.total} envíos</span>
+            <span className="text-blue-400">{stats.abiertos} abiertos</span>
+            <span className="text-emerald-400">{stats.listos} listos</span>
             {lastUpdateIso && (
-              <p className="text-xs text-gray-400 mt-0.5">Actualizado: {timeAgo(lastUpdateIso)}</p>
+              <span className="text-slate-500">Actualizado {timeAgo(lastUpdateIso)}</span>
             )}
           </div>
-          <div className="flex items-start gap-6">
-            <Stat label="Total"          value={stats.total}    color="text-white" />
-            <Stat label="Abiertos"       value={stats.abiertos} color="text-blue-400" />
-            <Stat label="Listos p/Insp." value={stats.listos}   color="text-green-400" />
-            <Stat label="Cerrados"       value={stats.cerrados} color="text-gray-400" />
-            <button
-              onClick={handleRefresh}
-              disabled={refreshing}
-              className="self-center ml-2 p-1.5 rounded-md text-gray-400 hover:text-white hover:bg-gray-700 transition-colors disabled:opacity-50"
-              title="Refrescar datos"
-            >
-              <svg className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
-          </div>
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="p-1 rounded text-slate-500 hover:text-white transition-colors disabled:opacity-40"
+          >
+            <svg className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
         </div>
-      </header>
 
-      {/* ── Filter bar ── */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 sticky top-0 z-20 shadow-sm">
-        <div className="max-w-screen-2xl mx-auto flex flex-wrap gap-3 items-center">
-          <input
-            type="text"
-            placeholder="Buscar container, PO, shipper..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="border border-gray-200 rounded-md px-3 py-1.5 text-sm w-60 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        {/* ── Page header ── */}
+        <div className="px-6 pt-5 pb-2 flex items-start justify-between shrink-0">
+          <div>
+            <h1 className="text-[22px] font-bold text-slate-900 tracking-tight">Inspecciones</h1>
+            <p className="text-[13px] text-slate-500 mt-0.5">Gestión de envíos y calidad · Elite Quality Assurance</p>
+          </div>
+          <button
+            onClick={() => { setFilterHoy(h => !h); setEstado('abierto') }}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-semibold transition-colors ${
+              filterHoy
+                ? 'bg-amber-500 text-white shadow-sm'
+                : 'bg-slate-900 text-white hover:bg-slate-700'
+            }`}
+          >
+            <span className="text-base leading-none">{filterHoy ? '★' : '☆'}</span>
+            Para hoy
+            <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold ${
+              filterHoy ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-300'
+            }`}>{stats.paraHoy}</span>
+          </button>
+        </div>
+
+        {/* ── Filter chips ── */}
+        <div className="px-6 pb-3 flex flex-wrap gap-2 items-center shrink-0">
+          <Chip label="Buscar container, PO..." value={search} onChange={setSearch} isSearch />
+          <Chip label="Cliente"     value={filterCliente}   onChange={setCliente}   options={clientes} />
+          <Chip label="Commodity"   value={filterCommodity} onChange={setCommodity} options={commodities} />
+          <Chip label="Location"    value={filterLocation}  onChange={setLocation}  options={locations} />
+          <Chip
+            label="Estado"
+            value={filterEstado === 'abierto' ? '' : filterEstado}
+            onChange={v => setEstado(v || 'abierto')}
+            options={['abierto', 'cerrado']}
           />
-          <BarSelect value={filterCliente}   onChange={setCliente}   options={clientes}               placeholder="Todos los clientes" />
-          <BarSelect value={filterEstado}    onChange={setEstado}    options={['abierto','cerrado']}   placeholder="Todos los estados" />
-          <BarSelect value={filterCommodity} onChange={setCommodity} options={commodities}             placeholder="Todos los commodities" />
 
-          {(search || filterCliente || filterEstado || filterCommodity || hasColFilters) && (
-            <button
-              onClick={() => {
-                setSearch(''); setCliente(''); setEstado('abierto')
-                setCommodity(''); setColFilters({})
-              }}
-              className="text-xs text-gray-500 hover:text-gray-800 underline"
-            >
-              Limpiar todo
+          {anyFilter && (
+            <button onClick={clearAll} className="text-[12px] text-slate-400 hover:text-slate-700 underline underline-offset-2">
+              Limpiar
             </button>
           )}
 
           <div className="ml-auto flex items-center gap-3">
-            <span className="text-xs text-gray-400">
-              {filtered.length} de {shipments.length} envíos
-            </span>
+            <span className="text-[12px] text-slate-400">{filtered.length} de {shipments.length}</span>
             <ColPicker visible={visibleCols} onChange={toggleCol} />
           </div>
         </div>
-      </div>
 
-      {/* ── Table ── */}
-      <main className="flex-1 overflow-x-auto px-6 py-4">
-        <div className="max-w-screen-2xl mx-auto">
-          <div className="rounded-lg border border-gray-200 overflow-hidden shadow-sm">
-            <table className="w-full border-collapse bg-white text-xs">
-              <thead className="bg-gray-800 sticky top-[57px] z-10">
-                {/* column labels — click to sort */}
-                <tr>
+        {/* ── Table ── */}
+        <div className="flex-1 overflow-auto px-6 pb-6 min-h-0">
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="bg-slate-800">
                   {visibleColumns.map(col => {
                     const isActive = sort?.key === col.key
                     return (
                       <th
                         key={col.key}
                         onClick={() => handleSort(col.key)}
-                        className={`px-3 py-2.5 text-left font-semibold whitespace-nowrap select-none cursor-pointer hover:bg-gray-700 transition-colors ${col.thClass ?? ''} ${isActive ? 'text-blue-300' : 'text-gray-200'}`}
+                        className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer select-none transition-colors hover:bg-slate-700 ${
+                          isActive ? 'text-blue-300' : 'text-slate-300'
+                        } ${col.tdClass ?? ''}`}
                       >
                         <span className="inline-flex items-center gap-1">
                           {col.label}
-                          <span className="text-[10px] opacity-60">
+                          <span className="opacity-50 text-[10px]">
                             {isActive ? (sort!.dir === 'asc' ? '↑' : '↓') : '↕'}
                           </span>
                         </span>
@@ -530,51 +844,32 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                     )
                   })}
                 </tr>
-                {/* per-column filter selects — values from real data */}
-                <tr className="bg-gray-700">
-                  {visibleColumns.map(col => {
-                    const opts = colOptions[col.key] ?? []
-                    const active = !!colFilters[col.key]
-                    return (
-                      <td key={col.key} className="px-2 py-1">
-                        <select
-                          value={colFilters[col.key] ?? ''}
-                          onChange={e => setColFilters(prev => ({ ...prev, [col.key]: e.target.value }))}
-                          className={`w-full text-xs rounded px-1.5 py-0.5 border focus:outline-none focus:border-blue-400 min-w-[70px] max-w-[200px] ${
-                            active
-                              ? 'bg-blue-600 text-white border-blue-400'
-                              : 'bg-gray-600 text-gray-200 border-gray-500'
-                          }`}
-                        >
-                          <option value="">—</option>
-                          {opts.map(v => (
-                            <option key={v} value={v}>{v}</option>
-                          ))}
-                        </select>
-                      </td>
-                    )
-                  })}
-                </tr>
               </thead>
 
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-slate-100">
                 {filtered.map(s => {
+                  const today     = new Date().toISOString().slice(0, 10)
                   const isCerrado = s.estado_general === 'cerrado'
                   const isListo   = s.ready_for_inspection === 1 && !isCerrado
+                  const eff       = effectiveDate(s)
+                  const isOverdue = isListo && eff != null && eff < today
+                  const isHoy     = isListo && eff === today
+
                   return (
                     <tr
                       key={s.id}
+                      onClick={() => setSelected(s)}
                       className={[
-                        'hover:bg-gray-50 transition-colors',
-                        isCerrado ? 'opacity-40' : '',
-                        isListo ? 'bg-green-50 hover:bg-green-100' : '',
+                        'cursor-pointer transition-colors',
+                        isCerrado  ? 'opacity-50 hover:opacity-70 hover:bg-slate-50' : '',
+                        isOverdue  ? 'bg-red-50 hover:bg-red-100' : '',
+                        isHoy      ? 'bg-amber-50 hover:bg-amber-100' : '',
+                        isListo && !isOverdue && !isHoy ? 'hover:bg-emerald-50' : '',
+                        !isListo && !isCerrado ? 'hover:bg-slate-50' : '',
                       ].filter(Boolean).join(' ')}
                     >
                       {visibleColumns.map(col => (
-                        <td
-                          key={col.key}
-                          className={`px-3 py-2 whitespace-nowrap ${col.tdClass ?? ''}`}
-                        >
+                        <td key={col.key} className={`px-3 py-2.5 whitespace-nowrap ${col.tdClass ?? ''}`}>
                           {col.render(s)}
                         </td>
                       ))}
@@ -583,7 +878,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={visibleColumns.length} className="py-16 text-center text-sm text-gray-400">
+                    <td colSpan={visibleColumns.length} className="py-20 text-center text-[13px] text-slate-400">
                       No se encontraron envíos con los filtros actuales.
                     </td>
                   </tr>
@@ -592,31 +887,13 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
             </table>
           </div>
         </div>
-      </main>
-    </div>
-  )
-}
+      </div>
 
-function Stat({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div className="text-right">
-      <div className={`text-2xl font-bold tabular-nums ${color}`}>{value}</div>
-      <div className="text-xs text-gray-500 mt-0.5">{label}</div>
-    </div>
-  )
-}
+      {/* ── Detail panel ── */}
+      {selected && <DetailPanel s={selected} onClose={() => setSelected(null)} />}
 
-function BarSelect({ value, onChange, options, placeholder }: {
-  value: string; onChange: (v: string) => void; options: string[]; placeholder: string
-}) {
-  return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      className="border border-gray-200 rounded-md px-2.5 py-1.5 text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-    >
-      <option value="">{placeholder}</option>
-      {options.map(o => <option key={o} value={o}>{o}</option>)}
-    </select>
+      {/* ── Toast notifications (Supabase Realtime) ── */}
+      <ToastList toasts={toasts} onDismiss={dismiss} />
+    </div>
   )
 }

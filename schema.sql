@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS shipments (
     -- Canonical fields
     cliente                 TEXT NOT NULL,
     tipo_carga              TEXT NOT NULL DEFAULT 'ocean',
+    location                TEXT,           -- Miami | Texas | Los Angeles
     po                      TEXT,
     unit_id                 TEXT,
     shipper                 TEXT,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS shipments (
     requiere_fumigacion             INTEGER,
     ready_for_inspection            INTEGER NOT NULL DEFAULT 0,
     dia_disponible_para_inspeccion  TEXT,
+    reinspection_due_date           TEXT,   -- Altar TX: report_date + 4 days
 
     -- Inspection (set from reports@eliteqa.app emails)
     inspection_status       TEXT NOT NULL DEFAULT 'pendiente',
@@ -57,12 +59,16 @@ CREATE TABLE IF NOT EXISTS shipments (
 
     estado_general          TEXT NOT NULL DEFAULT 'abierto',
 
+    -- Staff
+    inspector_id         INTEGER REFERENCES staff(id),
+
     -- Meta
     ultima_actualizacion TEXT NOT NULL,
     fuente               TEXT,
     comments_raw         TEXT,
     psi_file             TEXT,
     quantity_description TEXT,
+    lots_raw             TEXT,
 
     UNIQUE (lookup_key)
 );
@@ -72,6 +78,29 @@ CREATE INDEX IF NOT EXISTS idx_shipments_cliente_unit
 
 CREATE INDEX IF NOT EXISTS idx_shipments_cliente_po
     ON shipments (cliente_norm, po_norm);
+
+CREATE TABLE IF NOT EXISTS staff (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    role        TEXT NOT NULL CHECK (role IN ('inspector', 'editor', 'coordinator')),
+    zone        TEXT,               -- Miami | McAllen | Calexico | Los Angeles | Texas
+    whatsapp    TEXT,
+    email       TEXT,
+    active      INTEGER NOT NULL DEFAULT 1,
+    clients_assigned TEXT,          -- JSON array: ["Alpine", "Fresh Way"]
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    shipment_id INTEGER REFERENCES shipments(id),
+    event_type  TEXT NOT NULL,  -- ready_for_inspection | reinspection_due | report_received | eta_overdue
+    sent_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    channels    TEXT,           -- JSON: ["email","whatsapp","push"]
+    message     TEXT,
+    -- Dedup: one notification per shipment+event per day
+    UNIQUE (shipment_id, event_type, date(sent_at))
+);
 
 CREATE TABLE IF NOT EXISTS processed_messages (
     message_id   TEXT PRIMARY KEY,

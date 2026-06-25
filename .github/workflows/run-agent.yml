@@ -36,7 +36,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OCEAN_UPDATE_QUERY: '(subject:"OCEAN REPORT" OR subject:"OCEAN UPDATE") newer_than:7d'
-          AIR_ARRIVALS_QUERY: 'subject:"AIR ARRIVALS" newer_than:7d'
+          AIR_ARRIVALS_QUERY: '(subject:"AIR ARRIVALS" OR subject:"INSPECCION VEGLAND" OR subject:"VEGLAND") newer_than:7d'
           SQ1_RECEIVING_CARD_QUERY: 'subject:"SQ1 Inspection Request" newer_than:7d'
           INSPECTION_REPORT_QUERY: 'from:reports@eliteqa.app newer_than:7d'
+          PRIME_TIME_PL_QUERY: 'subject:PM- newer_than:30d'
+          # Notifications — Twilio (WhatsApp)
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_FROM: ${{ secrets.TWILIO_WHATSAPP_FROM }}
+          # Recipients — comma-separated numbers with country code, e.g. +13054441234,+17864445678
+          NOTIFY_WHATSAPP: ${{ secrets.NOTIFY_WHATSAPP }}
+          # Recipients — comma-separated emails
+          NOTIFY_EMAILS: ${{ secrets.NOTIFY_EMAILS }}
         run: python -m agent.main --since-hours 4

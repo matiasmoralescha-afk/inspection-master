@@ -9,7 +9,8 @@ alpine_fresh:
   subject_patterns:
     - "ALPINE FRESH"
     - "ALPINE"
-  cutoff_hour: 19
+  cutoff_hour: 17
+  location: Miami
   known_modes: [ocean, air]
 
 prime_time:
@@ -23,7 +24,8 @@ prime_time:
     - "PRIME TIME INTL"
   subject_patterns:
     - "PRIME TIME"
-  cutoff_hour: null
+  cutoff_hour: 16
+  location: Miami
   known_modes: [ocean, air, terrestre]
 
 altar_produce:
@@ -39,7 +41,8 @@ altar_produce:
     - "ALTAR"
   subject_patterns:
     - "ALTAR PRODUCE"
-  cutoff_hour: null
+  cutoff_hour: 16
+  location: Texas
   known_modes: [ocean]
 
 growers_are_us:
@@ -54,6 +57,7 @@ growers_are_us:
   subject_patterns:
     - "GROWERS ARE US"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean, air]
 
 greenfruit:
@@ -80,7 +84,10 @@ fresh_way:
     - "FRESH WAY USA"
   subject_patterns:
     - "FRESH WAY"
+    - "VEGLAND"
+    - "INSPECCION VEGLAND"
   cutoff_hour: null
+  location: Los Angeles  # LAX/Vegland; override per-shipment if Miami
   known_modes: [ocean, air, terrestre]
 
 robinson_fresh:
@@ -95,6 +102,7 @@ robinson_fresh:
   subject_patterns:
     - "ROBINSON FRESH"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean, air]
 
 square_one:
@@ -108,6 +116,7 @@ square_one:
   subject_patterns:
     - "SQUARE ONE"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean, air, repack, rejection]
 
 agropeppers:
