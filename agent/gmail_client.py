@@ -1,5 +1,5 @@
 """
-Gmail API client. Non-interactive — fails loudly if token is missing or expired.
+Gmail API client. Non-interactive -- fails loudly if token is missing or expired.
 Initial token must be generated locally via agent/auth_setup.py.
 """
 import base64
@@ -87,6 +87,23 @@ def get_message_body(message: dict) -> Optional[str]:
     return _extract_html_from_payload(payload)
 
 
+def get_message_text(message: dict) -> Optional[str]:
+    """
+    Extract the plain-text body from a Gmail message dict.
+    Falls back to HTML body if no text/plain part is found.
+    Useful for plain-text emails (e.g., GreenFruit UPCOMING LOADS).
+    """
+    payload = message.get('payload', {})
+    text = _extract_text_from_payload(payload)
+    if text:
+        return text
+    # Fallback: strip HTML if that's all we have
+    html = _extract_html_from_payload(payload)
+    if html:
+        return html  # caller can strip HTML with BeautifulSoup
+    return None
+
+
 def _extract_html_from_payload(payload: dict) -> Optional[str]:
     mime_type = payload.get('mimeType', '')
     body_data = payload.get('body', {}).get('data', '')
@@ -97,6 +114,21 @@ def _extract_html_from_payload(payload: dict) -> Optional[str]:
     # Recurse into multipart
     for part in payload.get('parts', []):
         result = _extract_html_from_payload(part)
+        if result:
+            return result
+
+    return None
+
+
+def _extract_text_from_payload(payload: dict) -> Optional[str]:
+    mime_type = payload.get('mimeType', '')
+    body_data = payload.get('body', {}).get('data', '')
+
+    if mime_type == 'text/plain' and body_data:
+        return base64.urlsafe_b64decode(body_data).decode('utf-8', errors='replace')
+
+    for part in payload.get('parts', []):
+        result = _extract_text_from_payload(part)
         if result:
             return result
 
