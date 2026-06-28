@@ -1,16 +1,10 @@
-import { createClient } from '@supabase/supabase-js'
+import { supabase } from '@/lib/supabase'
 import type { Staff } from '@/lib/types'
 import StaffTable from '@/components/staff-table'
 import Link from 'next/link'
 
 async function getStaff(): Promise<Staff[]> {
-  const client = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    { auth: { persistSession: false } },
-  )
-
-  const { data, error } = await client
+  const { data, error } = await supabase
     .from('staff')
     .select('*')
     .order('role')

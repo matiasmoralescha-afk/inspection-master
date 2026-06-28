@@ -46,7 +46,7 @@ function ToastList({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: num
   )
 }
 
-function useRealtimeNotifications() {
+function useRealtimeNotifications(onShipmentChange: () => void) {
   const [toasts, setToasts] = useState<Toast[]>([])
 
   const dismiss = useCallback((id: number) => {
@@ -55,7 +55,7 @@ function useRealtimeNotifications() {
 
   useEffect(() => {
     const channel = supabase
-      .channel('notifications-push')
+      .channel('dashboard-realtime')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications' },
@@ -66,15 +66,19 @@ function useRealtimeNotifications() {
             event_type: n.event_type,
             message:    n.message ?? '',
           }
-          setToasts(prev => [toast, ...prev].slice(0, 5))  // max 5 toasts
-          // Auto-dismiss after 8 seconds
+          setToasts(prev => [toast, ...prev].slice(0, 5))
           setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toast.id)), 8000)
         },
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shipments' },
+        () => { onShipmentChange() },
       )
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [])
+  }, [onShipmentChange])
 
   return { toasts, dismiss }
 }
@@ -958,7 +962,8 @@ type SortState = { key: string; dir: 'asc' | 'desc' } | null
 export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const router = useRouter()
   const [refreshing, setRefreshing] = useState(false)
-  const { toasts, dismiss } = useRealtimeNotifications()
+  const handleShipmentChange = useCallback(() => { router.refresh() }, [router])
+  const { toasts, dismiss } = useRealtimeNotifications(handleShipmentChange)
 
   // filters
   const [search,         setSearch]         = useState('')
