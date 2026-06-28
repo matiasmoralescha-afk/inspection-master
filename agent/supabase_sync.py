@@ -54,6 +54,57 @@ def sync(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> 
         return 0
 
 
+def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> int:
+    """
+    Pull all existing shipments FROM Supabase into local SQLite.
+    Call at startup in stateless environments (GitHub Actions) so derived
+    fields can be recomputed across all shipments, not just those with
+    emails in the current time window.
+    """
+    try:
+        from supabase import create_client
+        client = create_client(supabase_url, service_role_key)
+
+        # Fetch in pages to handle large datasets
+        page_size = 500
+        offset = 0
+        total = 0
+
+        # Columns that SQLite generates — must not be in INSERT
+        skip_cols = {'id', 'lookup_key'}
+
+        while True:
+            result = client.table('shipments').select('*').range(offset, offset + page_size - 1).execute()
+            rows = result.data or []
+            if not rows:
+                break
+
+            for row in rows:
+                # Build an INSERT OR IGNORE so we don't clobber freshly-parsed data
+                cols = {k: v for k, v in row.items() if k not in skip_cols and v is not None}
+                if not cols:
+                    continue
+                placeholders = ', '.join(['?'] * len(cols))
+                col_names = ', '.join(cols.keys())
+                conn.execute(
+                    f'INSERT OR IGNORE INTO shipments ({col_names}) VALUES ({placeholders})',
+                    list(cols.values()),
+                )
+                total += 1
+
+            offset += page_size
+            if len(rows) < page_size:
+                break
+
+        conn.commit()
+        logger.info('Restored %d shipments from Supabase into SQLite', total)
+        return total
+
+    except Exception:
+        logger.exception('Failed to restore shipments from Supabase — will only process recent emails')
+        return 0
+
+
 def restore_processed_messages(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> int:
     """
     Pull processed_messages FROM Supabase into local SQLite.

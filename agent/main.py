@@ -329,6 +329,7 @@ def main() -> None:
     sb_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
     if sb_url and sb_key and not args.dry_run:
         supabase_sync.restore_processed_messages(conn, sb_url, sb_key)
+        supabase_sync.restore_shipments(conn, sb_url, sb_key)
 
     gmail_token = _require_env('GMAIL_TOKEN_FILE')
     service     = gmail_client.build_service(gmail_token)
