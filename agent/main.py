@@ -719,6 +719,9 @@ def main() -> None:
             synced = supabase_sync.sync(conn, sb_url, sb_key)
             supabase_sync.sync_processed_messages(conn, sb_url, sb_key)
             logger.info('Supabase sync: %d rows upserted', synced)
+            # Directly recompute derived fields in Supabase for ALL open shipments,
+            # including those not touched in this run (stateless runner has empty SQLite)
+            supabase_sync.recompute_derived_fields_in_supabase(sb_url, sb_key, clients_config)
         else:
             logger.warning('Supabase sync skipped — SUPABASE_URL or key not configured')
 

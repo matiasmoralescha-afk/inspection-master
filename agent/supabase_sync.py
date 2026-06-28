@@ -4,6 +4,7 @@ Full upsert of all shipments each run — Supabase is a read replica for the web
 """
 import logging
 import sqlite3
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,89 @@ def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_
 
     except Exception:
         logger.exception('Failed to restore shipments from Supabase — will only process recent emails')
+        return 0
+
+
+def recompute_derived_fields_in_supabase(
+    supabase_url: str,
+    service_role_key: str,
+    clients_config: dict,
+) -> int:
+    """
+    Directly update dia_disponible_para_inspeccion and reinspection_due_date
+    in Supabase for all open shipments, without touching SQLite.
+
+    Uses eta_fecha as fallback when fumigation_completed_at is not set.
+    This ensures the dashboard always shows correct dates even in stateless runs
+    where the local SQLite DB has no rows from recent emails.
+
+    Returns number of rows updated.
+    """
+    try:
+        from datetime import date, datetime, timedelta
+        from supabase import create_client
+
+        client = create_client(supabase_url, service_role_key)
+
+        # Fetch all open shipments
+        result = client.table('shipments').select(
+            'id,lookup_key,cliente,eta_fecha,fumigation_completed_at,'
+            'dia_disponible_para_inspeccion,reinspection_due_date,report_date'
+        ).eq('estado_general', 'abierto').execute()
+
+        rows = result.data or []
+        logger.info('recompute_derived: fetched %d open shipments from Supabase', len(rows))
+
+        updated = 0
+        for row in rows:
+            updates: dict = {}
+
+            # --- dia_disponible_para_inspeccion ---
+            fum_done = row.get('fumigation_completed_at')
+            if fum_done:
+                # Precise date from fumigation completion + cutoff
+                try:
+                    fum_dt = datetime.fromisoformat(fum_done)
+                    cliente = row.get('cliente', '')
+                    cutoff = None
+                    for _k, cfg in clients_config.items():
+                        if cfg['display_name'].lower() == cliente.lower():
+                            cutoff = cfg.get('cutoff_hour')
+                            break
+                    if cutoff is not None and fum_dt.hour >= cutoff:
+                        dia = (fum_dt + timedelta(days=1)).date().isoformat()
+                    else:
+                        dia = fum_dt.date().isoformat()
+                    if dia != row.get('dia_disponible_para_inspeccion'):
+                        updates['dia_disponible_para_inspeccion'] = dia
+                except ValueError:
+                    pass
+            else:
+                # Fallback: use eta_fecha
+                eta = row.get('eta_fecha')
+                if eta and eta != row.get('dia_disponible_para_inspeccion'):
+                    updates['dia_disponible_para_inspeccion'] = eta[:10]
+
+            # --- reinspection_due_date (Altar TX only) ---
+            if 'altar' in (row.get('cliente') or '').lower():
+                report_date = row.get('report_date')
+                if report_date:
+                    try:
+                        due = (date.fromisoformat(report_date[:10]) + timedelta(days=4)).isoformat()
+                        if due != row.get('reinspection_due_date'):
+                            updates['reinspection_due_date'] = due
+                    except ValueError:
+                        pass
+
+            if updates:
+                client.table('shipments').update(updates).eq('id', row['id']).execute()
+                updated += 1
+
+        logger.info('recompute_derived: updated %d rows in Supabase', updated)
+        return updated
+
+    except Exception:
+        logger.exception('recompute_derived_fields_in_supabase failed — non-fatal')
         return 0
 
 
