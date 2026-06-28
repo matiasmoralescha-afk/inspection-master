@@ -73,6 +73,7 @@ greenfruit:
     - "GREENFRUIT"
     - "GREEN FRUIT"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean]
 
 fresh_way:
