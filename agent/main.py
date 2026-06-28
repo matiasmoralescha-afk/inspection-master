@@ -512,12 +512,15 @@ def main() -> None:
                             (record['cliente_norm'], record['unit_id_norm']),
                         ).fetchone()
                         if saved:
+                            derived = {}
                             dia = business_rules.calc_dia_disponible(dict(saved), clients_config)
                             if dia:
-                                db_mod.update_derived_fields(
-                                    conn, saved['id'],
-                                    {'dia_disponible_para_inspeccion': dia},
-                                )
+                                derived['dia_disponible_para_inspeccion'] = dia
+                            reinsp = business_rules.calc_reinspection_due_date(dict(saved), clients_config)
+                            if reinsp:
+                                derived['reinspection_due_date'] = reinsp
+                            if derived:
+                                db_mod.update_derived_fields(conn, saved['id'], derived)
                             notif.check_and_notify(dict(saved), prev, conn, service)
 
             elif email_type == 'air_arrival':
@@ -579,12 +582,15 @@ def main() -> None:
                             (record['cliente_norm'], record['unit_id_norm']),
                         ).fetchone()
                         if saved:
+                            derived = {}
                             dia = business_rules.calc_dia_disponible(dict(saved), clients_config)
                             if dia:
-                                db_mod.update_derived_fields(
-                                    conn, saved['id'],
-                                    {'dia_disponible_para_inspeccion': dia},
-                                )
+                                derived['dia_disponible_para_inspeccion'] = dia
+                            reinsp = business_rules.calc_reinspection_due_date(dict(saved), clients_config)
+                            if reinsp:
+                                derived['reinspection_due_date'] = reinsp
+                            if derived:
+                                db_mod.update_derived_fields(conn, saved['id'], derived)
                             notif.check_and_notify(dict(saved), prev, conn, service)
 
             elif email_type == 'sq1_receiving_card':

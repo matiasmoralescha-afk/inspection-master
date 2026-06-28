@@ -79,6 +79,28 @@ function useRealtimeNotifications() {
   return { toasts, dismiss }
 }
 
+// ─── profile persistence ──────────────────────────────────────────────────────
+
+const PROFILE_KEY = 'eqa-dashboard-v1'
+
+function loadProfile(): { order: string[]; visible: string[] } | null {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(PROFILE_KEY) : null
+    return raw ? JSON.parse(raw) : null
+  } catch { return null }
+}
+
+function saveProfile(order: string[], visible: string[]): void {
+  try { localStorage.setItem(PROFILE_KEY, JSON.stringify({ order, visible })) } catch {}
+}
+
+function mergeOrder(stored: string[]): string[] {
+  const current = COLUMNS.map(c => c.key)
+  const valid   = stored.filter(k => current.includes(k))
+  const missing = current.filter(k => !valid.includes(k))
+  return [...valid, ...missing]
+}
+
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function timeAgo(isoStr: string): string {
@@ -331,7 +353,7 @@ function Chip({
 
 // ─── column picker ────────────────────────────────────────────────────────────
 
-function ColPicker({ visible, onChange }: { visible: Set<string>; onChange: (k: string, on: boolean) => void }) {
+function ColPicker({ visible, onChange, onResetOrder }: { visible: Set<string>; onChange: (k: string, on: boolean) => void; onResetOrder?: () => void }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -374,7 +396,13 @@ function ColPicker({ visible, onChange }: { visible: Set<string>; onChange: (k: 
           <div className="border-t border-slate-100 mt-2 pt-2 flex gap-2">
             <button onClick={() => COLUMNS.forEach(c => onChange(c.key, true))} className="text-[12px] text-blue-600 hover:underline">Todas</button>
             <span className="text-slate-300">·</span>
-            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))} className="text-[12px] text-slate-400 hover:underline">Reset</button>
+            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))} className="text-[12px] text-slate-400 hover:underline">Reset cols</button>
+            {onResetOrder && (
+              <>
+                <span className="text-slate-300">·</span>
+                <button onClick={onResetOrder} className="text-[12px] text-slate-400 hover:underline">Reset orden</button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -396,12 +424,32 @@ function SidebarIcon({ active, children }: { active?: boolean; children: React.R
 
 // ─── detail panel ─────────────────────────────────────────────────────────────
 
-function DetailPanel({ s, onClose }: { s: Shipment; onClose: () => void }) {
+function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) => void }) {
+  const [local,  setLocal]  = useState<Shipment>(s)
+  const [dirty,  setDirty]  = useState(false)
+  const [saving, setSaving] = useState<string | null>(null)
+
+  // If parent refreshes (s changes identity), re-sync only when panel is clean
+  useEffect(() => { if (!dirty) setLocal(s) }, [s, dirty])
+
   const today = new Date().toISOString().slice(0, 10)
-  const eff = effectiveDate(s)
+  const eff   = effectiveDate(local)
+
+  async function save(field: keyof Shipment, value: unknown) {
+    setSaving(field as string)
+    const patch = { [field]: value } as Partial<Shipment>
+    setLocal(prev => ({ ...prev, ...patch }))
+    setDirty(true)
+    await supabase.from('shipments').update(patch).eq('id', local.id)
+    setSaving(null)
+  }
+
+  function sv(field: keyof Shipment) {
+    return (v: string | null) => save(field, v)
+  }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={() => onClose(dirty)}>
       <div
         className="w-full max-w-md bg-white shadow-2xl flex flex-col overflow-y-auto"
         onClick={e => e.stopPropagation()}
@@ -409,78 +457,96 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: () => void }) {
         {/* header */}
         <div className="bg-slate-900 px-5 py-4 flex items-start justify-between">
           <div>
-            <p className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">{s.cliente}</p>
-            <h2 className="text-base font-bold text-white mt-0.5 font-mono">{s.unit_id ?? s.po ?? '—'}</h2>
-            {s.po && s.unit_id && <p className="text-[12px] text-slate-400 mt-0.5 font-mono">PO: {s.po}</p>}
+            <p className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">{local.cliente}</p>
+            <h2 className="text-base font-bold text-white mt-0.5 font-mono">{local.unit_id ?? local.po ?? '—'}</h2>
+            {local.po && local.unit_id && <p className="text-[12px] text-slate-400 mt-0.5 font-mono">PO: {local.po}</p>}
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white text-lg leading-none mt-0.5">✕</button>
+          <div className="flex items-center gap-2">
+            {saving && <span className="text-[11px] text-slate-400 animate-pulse">Guardando…</span>}
+            {dirty && !saving && <span className="text-[11px] text-emerald-400">✓ Guardado</span>}
+            <button onClick={() => onClose(dirty)} className="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+          </div>
         </div>
 
         {/* status strip */}
         <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-3">
-          <StatusBadge s={s} />
+          <StatusBadge s={local} />
           {eff && (
             <span className={`text-[13px] ${eff < today ? 'text-red-500 font-medium' : eff === today ? 'text-amber-600 font-semibold' : 'text-slate-500'}`}>
               {eff === today ? 'Hoy — ' : ''}{fmtDate(eff)}
             </span>
           )}
-          {s.location && (
-            <span className="ml-auto text-[11px] font-medium bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{s.location}</span>
+          {local.location && (
+            <span className="ml-auto text-[11px] font-medium bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{local.location}</span>
           )}
         </div>
 
         {/* body */}
         <div className="flex-1 px-5 py-4 space-y-5">
-          {/* shipment info */}
+
+          {/* status overrides */}
           <section>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Estado</p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <EField label="Estado general" value={local.estado_general} onSave={sv('estado_general')}
+                options={[{value:'abierto',label:'Abierto'},{value:'cerrado',label:'Cerrado'}]} />
+              <EField label="Inspección" value={local.inspection_status} onSave={sv('inspection_status')}
+                options={[{value:'pendiente',label:'Pendiente'},{value:'programada',label:'Programada'},{value:'completada',label:'Completada'}]} />
+            </dl>
+          </section>
+
+          {/* shipment info */}
+          <section className="border-t border-slate-100 pt-4">
             <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Envío</p>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-              <DetailKV label="Commodity"   value={s.commodity} />
-              <DetailKV label="País origen" value={s.country_of_origin} />
-              <DetailKV label="Shipper"     value={s.shipper} />
-              <DetailKV label="ETA"         value={fmtDate(s.eta_fecha)} />
-              <DetailKV label="Día disp."   value={fmtDate(s.dia_disponible_para_inspeccion)} />
-              <DetailKV label="BL#"         value={s.bl} />
-              <DetailKV label="Buque"       value={s.vessel} />
-              <DetailKV label="Pallets"     value={s.pallets != null ? String(s.pallets) : null} />
-              {s.reinspection_due_date && (
-                <DetailKV label="Reinsp. due" value={fmtDate(s.reinspection_due_date)} />
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <EField label="Commodity"   value={local.commodity}       onSave={sv('commodity')} />
+              <EField label="País origen" value={local.country_of_origin} onSave={sv('country_of_origin')} />
+              <EField label="Shipper"     value={local.shipper}          onSave={sv('shipper')} />
+              <EField label="ETA"         value={local.eta_fecha}        onSave={sv('eta_fecha')} type="date" />
+              <EField label="Día disp."   value={local.dia_disponible_para_inspeccion} onSave={sv('dia_disponible_para_inspeccion')} type="date" />
+              <EField label="BL#"         value={local.bl}               onSave={sv('bl')} />
+              <EField label="Buque"       value={local.vessel}           onSave={sv('vessel')} />
+              <EField label="Pallets"     value={local.pallets != null ? String(local.pallets) : null} onSave={v => save('pallets', v ? parseInt(v) : null)} type="number" />
+              <EField label="PO"          value={local.po}               onSave={sv('po')} />
+              <EField label="Container"   value={local.unit_id}          onSave={sv('unit_id')} />
+              {local.reinspection_due_date && (
+                <DetailKV label="Reinsp. due" value={fmtDate(local.reinspection_due_date)} />
               )}
             </dl>
           </section>
 
-          {/* statuses */}
+          {/* customs statuses */}
           <section className="border-t border-slate-100 pt-4">
             <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Estatus aduanas</p>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-              <DetailKV label="FDA"        value={s.fda_status} />
-              <DetailKV label="Customs"    value={s.customs_status} />
-              <DetailKV label="USDA"       value={s.agriculture_usda_status} />
-              <DetailKV label="Fumigación" value={s.fumigation_status} />
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <EField label="FDA"        value={local.fda_status}               onSave={sv('fda_status')} />
+              <EField label="Customs"    value={local.customs_status}            onSave={sv('customs_status')} />
+              <EField label="USDA"       value={local.agriculture_usda_status}   onSave={sv('agriculture_usda_status')} />
+              <EField label="Fumigación" value={local.fumigation_status}         onSave={sv('fumigation_status')} />
             </dl>
           </section>
 
           {/* inspection results */}
-          {(s.overall_grade || s.condition_text || s.quality_text) && (
+          {(local.overall_grade || local.condition_text || local.quality_text) && (
             <section className="border-t border-slate-100 pt-4">
               <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Resultado</p>
-              {s.overall_grade && (
-                <p className={`text-2xl font-bold mb-2 ${gradeColor(s.overall_grade)}`}>Grade {s.overall_grade}</p>
+              {local.overall_grade && (
+                <p className={`text-2xl font-bold mb-2 ${gradeColor(local.overall_grade)}`}>Grade {local.overall_grade}</p>
               )}
-              {s.condition_text && (
+              {local.condition_text && (
                 <div className="mb-2">
                   <p className="text-[11px] text-slate-400 mb-0.5">Condición</p>
-                  <p className="text-[13px] text-slate-700 leading-relaxed">{s.condition_text}</p>
+                  <p className="text-[13px] text-slate-700 leading-relaxed">{local.condition_text}</p>
                 </div>
               )}
-              {s.quality_text && (
+              {local.quality_text && (
                 <div className="mb-2">
                   <p className="text-[11px] text-slate-400 mb-0.5">Calidad</p>
-                  <p className="text-[13px] text-slate-700 leading-relaxed">{s.quality_text}</p>
+                  <p className="text-[13px] text-slate-700 leading-relaxed">{local.quality_text}</p>
                 </div>
               )}
-              {s.report_url && (
-                <a href={s.report_url} target="_blank" rel="noopener noreferrer"
+              {local.report_url && (
+                <a href={local.report_url} target="_blank" rel="noopener noreferrer"
                    className="inline-flex items-center gap-1 text-[13px] text-blue-600 hover:underline mt-1">
                   Ver reporte completo
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -492,23 +558,22 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: () => void }) {
           )}
 
           {/* lots */}
-          {s.lots_raw && (
+          {local.lots_raw && (
             <section className="border-t border-slate-100 pt-4">
               <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Lots</p>
-              <pre className="text-[12px] text-slate-700 bg-slate-50 rounded-md p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{s.lots_raw}</pre>
+              <pre className="text-[12px] text-slate-700 bg-slate-50 rounded-md p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{local.lots_raw}</pre>
             </section>
           )}
 
           {/* inspector assignment */}
-          <InspectorDropdown shipment={s} />
+          <InspectorDropdown shipment={local} />
 
           {/* comments */}
-          {s.comments_raw && (
-            <section className="border-t border-slate-100 pt-4">
-              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Comentarios</p>
-              <p className="text-[13px] text-slate-700 leading-relaxed whitespace-pre-wrap">{s.comments_raw}</p>
-            </section>
-          )}
+          <section className="border-t border-slate-100 pt-4">
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Comentarios</p>
+            <EField label="" value={local.comments_raw} onSave={sv('comments_raw')} multiline />
+          </section>
+
         </div>
       </div>
     </div>
@@ -520,6 +585,100 @@ function DetailKV({ label, value }: { label: string; value: string | null | unde
     <div>
       <dt className="text-[11px] text-slate-400">{label}</dt>
       <dd className="text-[13px] text-slate-800 mt-0.5">{value || '—'}</dd>
+    </div>
+  )
+}
+
+// ─── editable field ───────────────────────────────────────────────────────────
+
+type EFieldOption = { value: string; label: string }
+
+function EField({
+  label, value, onSave, type = 'text', options, multiline,
+}: {
+  label: string
+  value: string | number | null | undefined
+  onSave: (v: string | null) => void
+  type?: 'text' | 'date' | 'number'
+  options?: EFieldOption[]
+  multiline?: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft,   setDraft]   = useState(String(value ?? ''))
+
+  useEffect(() => { if (!editing) setDraft(String(value ?? '')) }, [value, editing])
+
+  function confirm() { setEditing(false); onSave(draft.trim() || null) }
+  function cancel()  { setDraft(String(value ?? '')); setEditing(false) }
+
+  function handleKey(e: React.KeyboardEvent) {
+    if (e.key === 'Enter' && !multiline) confirm()
+    if (e.key === 'Escape') cancel()
+  }
+
+  const inputCls = 'w-full text-[13px] border border-blue-300 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500'
+
+  return (
+    <div className="group">
+      <dt className="text-[11px] text-slate-400 flex items-center gap-1">
+        {label}
+        {!editing && (
+          <button
+            onClick={e => { e.stopPropagation(); setEditing(true) }}
+            className="opacity-0 group-hover:opacity-50 hover:!opacity-100 transition-opacity"
+            title="Editar"
+          >
+            <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+          </button>
+        )}
+      </dt>
+      <dd className="mt-0.5">
+        {editing ? (
+          options ? (
+            <select
+              value={draft}
+              onChange={e => { const v = e.target.value; setDraft(v); onSave(v || null); setEditing(false) }}
+              onBlur={cancel}
+              className={inputCls}
+              autoFocus
+            >
+              <option value="">—</option>
+              {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          ) : multiline ? (
+            <textarea
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onBlur={confirm}
+              onKeyDown={handleKey}
+              className={`${inputCls} resize-none`}
+              rows={3}
+              autoFocus
+            />
+          ) : (
+            <input
+              type={type}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onBlur={confirm}
+              onKeyDown={handleKey}
+              className={inputCls}
+              autoFocus
+            />
+          )
+        ) : (
+          <span
+            className="text-[13px] text-slate-800 block py-0.5 cursor-text hover:bg-blue-50 rounded -mx-0.5 px-0.5 transition-colors"
+            onDoubleClick={() => setEditing(true)}
+            title="Doble clic para editar"
+          >
+            {value != null && value !== '' ? String(value) : <span className="text-slate-300">—</span>}
+          </span>
+        )}
+      </dd>
     </div>
   )
 }
@@ -654,6 +813,142 @@ function NotificationBell() {
   )
 }
 
+// ─── briefing view ────────────────────────────────────────────────────────────
+
+function BriefingCard({ s, onClick }: { s: Shipment; onClick: () => void }) {
+  const today    = new Date().toISOString().slice(0, 10)
+  const eff      = effectiveDate(s)
+  const isReady  = s.ready_for_inspection === 1
+  const isOverdue = eff != null && eff < today
+
+  const clientColor = isOverdue ? 'text-red-600' : isReady ? 'text-emerald-600' : 'text-slate-500'
+
+  return (
+    <div
+      onClick={onClick}
+      className={`bg-white rounded-xl border p-4 cursor-pointer transition-all hover:shadow-md hover:-translate-y-px active:scale-[0.99] ${
+        isOverdue ? 'border-red-200 bg-red-50/40' : isReady ? 'border-emerald-200' : 'border-slate-200'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2 mb-2">
+        <div className="min-w-0">
+          <p className={`text-[10px] font-bold uppercase tracking-wider ${clientColor}`}>{s.cliente}</p>
+          <p className="font-mono text-[14px] font-bold text-slate-900 mt-0.5 truncate">{s.unit_id ?? s.po ?? '—'}</p>
+          {s.po && s.unit_id && <p className="font-mono text-[11px] text-slate-400 truncate">PO {s.po}</p>}
+        </div>
+        <StatusBadge s={s} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+        {s.commodity && <span className="text-[12px] text-slate-700">{s.commodity}</span>}
+        {s.location && (
+          <span className="text-[11px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full">{s.location}</span>
+        )}
+        {s.pallets != null && <span className="text-[11px] text-slate-400">{s.pallets} plt</span>}
+      </div>
+
+      {(s.fda_status || s.fumigation_status || s.agriculture_usda_status) && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-2.5 pt-2.5 border-t border-slate-100">
+          {s.fda_status && (
+            <span className={`text-[11px] font-medium ${
+              s.fda_status.toUpperCase().includes('RELEAS') ? 'text-emerald-600' : 'text-amber-600'
+            }`}>
+              FDA: {s.fda_status}
+            </span>
+          )}
+          {s.fumigation_status && (
+            <span className={`text-[11px] ${
+              s.fumigation_status.toUpperCase().includes('CLEAR') || s.fumigation_status.toUpperCase().includes('DONE')
+                ? 'text-emerald-600' : 'text-amber-500'
+            }`}>
+              Fum: {s.fumigation_status}
+            </span>
+          )}
+          {s.agriculture_usda_status && (
+            <span className={`text-[11px] ${
+              s.agriculture_usda_status.toUpperCase().includes('CLEAR') ? 'text-emerald-600' : 'text-amber-500'
+            }`}>
+              Ag: {s.agriculture_usda_status}
+            </span>
+          )}
+        </div>
+      )}
+
+      {s.shipper && (
+        <p className="text-[11px] text-slate-400 mt-1.5 truncate">{s.shipper}</p>
+      )}
+    </div>
+  )
+}
+
+function BriefingPanel({ shipments, onSelect }: { shipments: Shipment[]; onSelect: (s: Shipment) => void }) {
+  const today    = new Date().toISOString().slice(0, 10)
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
+
+  const groups = [
+    {
+      key: 'overdue',
+      label: 'Atrasado',
+      sublabel: 'ETA pasada sin inspeccionar',
+      headerCls: 'text-red-700 bg-red-50 border-red-200',
+      items: shipments.filter(s => { const e = effectiveDate(s); return e && e < today }),
+    },
+    {
+      key: 'today',
+      label: `Hoy — ${fmtDate(today)}`,
+      sublabel: null,
+      headerCls: 'text-amber-700 bg-amber-50 border-amber-200',
+      items: shipments.filter(s => effectiveDate(s) === today),
+    },
+    {
+      key: 'tomorrow',
+      label: `Mañana — ${fmtDate(tomorrow)}`,
+      sublabel: null,
+      headerCls: 'text-blue-700 bg-blue-50 border-blue-200',
+      items: shipments.filter(s => effectiveDate(s) === tomorrow),
+    },
+  ].filter(g => g.items.length > 0)
+
+  if (groups.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 pb-20">
+        <svg className="w-12 h-12 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p className="text-[14px] font-medium text-slate-400">Sin inspecciones para hoy ni mañana</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 overflow-auto px-6 pb-6 min-h-0">
+      <div className="space-y-8">
+        {groups.map(group => (
+          <div key={group.key}>
+            <div className="flex items-center gap-3 mb-3">
+              <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[12px] font-semibold border ${group.headerCls}`}>
+                {group.label}
+                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/60 text-[10px] font-bold">
+                  {group.items.length}
+                </span>
+              </span>
+              {group.sublabel && (
+                <span className="text-[12px] text-slate-400">{group.sublabel}</span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {group.items.map(s => (
+                <BriefingCard key={s.id} s={s} onClick={() => onSelect(s)} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── main component ───────────────────────────────────────────────────────────
 
 const DEFAULT_VISIBLE = new Set(COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
@@ -675,9 +970,19 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
 
   // ui state
   const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
+  const [colOrder,    setColOrder]    = useState<string[]>(() => COLUMNS.map(c => c.key))
   const [colFilters,  setColFilters]  = useState<Record<string, string>>({})
   const [sort,        setSort]        = useState<SortState>(null)
   const [selected,    setSelected]    = useState<Shipment | null>(null)
+  const dragColKey = useRef<string | null>(null)
+
+  // load profile from localStorage on mount
+  useEffect(() => {
+    const p = loadProfile()
+    if (!p) return
+    setColOrder(mergeOrder(p.order))
+    setVisibleCols(new Set(p.visible))
+  }, [])
 
   function handleSort(key: string) {
     setSort(prev => {
@@ -697,13 +1002,45 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     setVisibleCols(prev => {
       const next = new Set(prev)
       on ? next.add(key) : next.delete(key)
+      saveProfile(colOrder, [...next])
       return next
     })
   }
 
+  function handleColDragStart(key: string) {
+    dragColKey.current = key
+  }
+
+  function handleColDrop(targetKey: string) {
+    const from = dragColKey.current
+    if (!from || from === targetKey) return
+    setColOrder(prev => {
+      const next = [...prev]
+      const fi = next.indexOf(from)
+      const ti = next.indexOf(targetKey)
+      if (fi === -1 || ti === -1) return prev
+      next.splice(fi, 1)
+      next.splice(ti, 0, from)
+      saveProfile(next, [...visibleCols])
+      return next
+    })
+    dragColKey.current = null
+  }
+
+  function handleResetOrder() {
+    const defaultOrder = COLUMNS.map(c => c.key)
+    setColOrder(defaultOrder)
+    saveProfile(defaultOrder, [...visibleCols])
+  }
+
+  function handlePanelClose(dirty: boolean) {
+    setSelected(null)
+    if (dirty) router.refresh()
+  }
+
   const visibleColumns = useMemo(
-    () => COLUMNS.filter(c => visibleCols.has(c.key)),
-    [visibleCols],
+    () => colOrder.map(k => COLUMNS.find(c => c.key === k)).filter((c): c is Col => !!c && visibleCols.has(c.key)),
+    [colOrder, visibleCols],
   )
 
   // unique lists for filter chips
@@ -713,7 +1050,8 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
 
   // stats
   const stats = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10)
+    const today    = new Date().toISOString().slice(0, 10)
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
     return {
       total:    shipments.length,
       abiertos: shipments.filter(s => s.estado_general === 'abierto').length,
@@ -722,7 +1060,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       paraHoy:  shipments.filter(s => {
         if (s.estado_general !== 'abierto') return false
         const eff = effectiveDate(s)
-        return eff != null && eff <= today
+        return eff != null && eff <= tomorrow
       }).length,
     }
   }, [shipments])
@@ -780,7 +1118,8 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       if (filterHoy) {
         if (s.estado_general !== 'abierto') return false
         const eff = effectiveDate(s)
-        if (!eff || eff > today) return false
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
+        if (!eff || eff > tomorrow) return false
       }
       if (q) {
         const hay = [s.unit_id, s.po, s.shipper, s.cliente, s.commodity, s.vessel].join(' ').toLowerCase()
@@ -929,7 +1268,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
             }`}
           >
             <span className="text-base leading-none">{filterHoy ? '★' : '☆'}</span>
-            Para hoy
+            Hoy &amp; Mañana
             <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold ${
               filterHoy ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-300'
             }`}>{stats.paraHoy}</span>
@@ -957,11 +1296,14 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
 
           <div className="ml-auto flex items-center gap-3">
             <span className="text-[12px] text-slate-400">{filtered.length} de {shipments.length}</span>
-            <ColPicker visible={visibleCols} onChange={toggleCol} />
+            <ColPicker visible={visibleCols} onChange={toggleCol} onResetOrder={handleResetOrder} />
           </div>
         </div>
 
-        {/* ── Table ── */}
+        {/* ── Content: Briefing or Table ── */}
+        {filterHoy ? (
+          <BriefingPanel shipments={filtered} onSelect={setSelected} />
+        ) : (
         <div className="flex-1 overflow-auto px-6 pb-6 min-h-0">
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
             <table className="w-full border-collapse text-left">
@@ -972,12 +1314,17 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                     return (
                       <th
                         key={col.key}
+                        draggable
+                        onDragStart={() => handleColDragStart(col.key)}
+                        onDragOver={e => e.preventDefault()}
+                        onDrop={() => handleColDrop(col.key)}
                         onClick={() => handleSort(col.key)}
                         className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer select-none transition-colors hover:bg-slate-700 ${
                           isActive ? 'text-blue-300' : 'text-slate-300'
                         } ${col.tdClass ?? ''}`}
                       >
                         <span className="inline-flex items-center gap-1">
+                          <span className="opacity-30 text-[10px] mr-0.5 cursor-grab">⠿</span>
                           {col.label}
                           <span className="opacity-50 text-[10px]">
                             {isActive ? (sort!.dir === 'asc' ? '↑' : '↓') : '↕'}
@@ -1030,10 +1377,11 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
             </table>
           </div>
         </div>
+        )}
       </div>
 
       {/* ── Detail panel ── */}
-      {selected && <DetailPanel s={selected} onClose={() => setSelected(null)} />}
+      {selected && <DetailPanel s={selected} onClose={handlePanelClose} />}
 
       {/* ── Toast notifications (Supabase Realtime) ── */}
       <ToastList toasts={toasts} onDismiss={dismiss} />

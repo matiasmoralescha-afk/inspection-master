@@ -175,3 +175,15 @@ icon:
     - "ICON"
   cutoff_hour: null
   known_modes: [ocean, air]
+
+sol_de_ica:
+  display_name: "Sol de Ica"
+  aliases:
+    - "Sol de Ica"
+    - "SOL DE ICA"
+    - "Sol De Ica"
+  subject_patterns:
+    - "SOL DE ICA"
+  cutoff_hour: null
+  location: Miami
+  known_modes: [ocean, air]

@@ -7,13 +7,14 @@ create table if not exists notifications (
     event_type  text not null,
     sent_at     timestamptz not null default now(),
     channels    text,
-    message     text,
-    unique (shipment_id, event_type, (sent_at::date))
+    message     text
 );
+
+-- Deduplication is enforced at the Python level (agent/notifications.py → _already_notified())
+-- A DB-level unique index on a functional expression (sent_at::date) is not supported on Supabase
+-- free tier due to the IMMUTABLE requirement on timestamptz → date casts.
 
 alter table notifications disable row level security;
 
 -- Enable Supabase Realtime on this table (required for dashboard push toasts)
--- Go to: Supabase Dashboard → Database → Replication → Supabase Realtime
--- and toggle ON the `notifications` table, OR run:
 alter publication supabase_realtime add table notifications;

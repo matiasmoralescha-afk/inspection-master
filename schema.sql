@@ -97,10 +97,13 @@ CREATE TABLE IF NOT EXISTS notifications (
     event_type  TEXT NOT NULL,  -- ready_for_inspection | reinspection_due | report_received | eta_overdue
     sent_at     TEXT NOT NULL DEFAULT (datetime('now')),
     channels    TEXT,           -- JSON: ["email","whatsapp","push"]
-    message     TEXT,
-    -- Dedup: one notification per shipment+event per day
-    UNIQUE (shipment_id, event_type, date(sent_at))
+    message     TEXT
 );
+
+-- Dedup index: one notification per shipment+event per day
+-- (Expressed as a separate index because SQLite <3.38 rejects expressions inside UNIQUE constraints)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedup
+    ON notifications (shipment_id, event_type, date(sent_at));
 
 CREATE TABLE IF NOT EXISTS processed_messages (
     message_id   TEXT PRIMARY KEY,

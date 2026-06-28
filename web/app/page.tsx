@@ -11,7 +11,7 @@ async function getShipments(): Promise<Shipment[]> {
 
   const { data, error } = await client
     .from('shipments')
-    .select('*')
+    .select('*, inspector:staff(id,name,role,zone)')
     .order('estado_general', { ascending: true })
     .order('eta_fecha', { ascending: true, nullsFirst: false })
 
