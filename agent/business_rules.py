@@ -134,30 +134,43 @@ def calc_reinspection_due_date(shipment: dict, clients_config: dict) -> Optional
     return due.isoformat()
 
 
+def _get_cutoff_hour(cliente: str, clients_config: dict) -> Optional[int]:
+    for _key, cfg in clients_config.items():
+        if cfg['display_name'].lower() == cliente.lower():
+            return cfg.get('cutoff_hour')
+    return None
+
+
 def calc_dia_disponible(shipment: dict, clients_config: dict) -> Optional[str]:
     """
     Section 4.5 — calculate dia_disponible_para_inspeccion applying cutoff rule.
+    Priority:
+    1. fumigation_completed_at → precise date with cutoff logic
+    2. eta_fecha → best-estimate fallback (used when fumigation is pending or not required)
     Returns YYYY-MM-DD string or None.
     """
-    fum_completed_at_str = shipment.get('fumigation_completed_at')
-    if not fum_completed_at_str:
-        return None
-
-    try:
-        fum_dt = datetime.fromisoformat(fum_completed_at_str)
-    except ValueError:
-        return None
-
     cliente = shipment.get('cliente', '')
-    cutoff_hour = None
-    for _key, cfg in clients_config.items():
-        if cfg['display_name'].lower() == cliente.lower():
-            cutoff_hour = cfg.get('cutoff_hour')
-            break
 
-    if cutoff_hour is not None:
-        available = get_available_date(fum_dt, cutoff_hour)
-    else:
-        available = fum_dt.date()
+    # 1. Fumigation completed — precise date
+    fum_completed_at_str = shipment.get('fumigation_completed_at')
+    if fum_completed_at_str:
+        try:
+            fum_dt = datetime.fromisoformat(fum_completed_at_str)
+            cutoff_hour = _get_cutoff_hour(cliente, clients_config)
+            if cutoff_hour is not None:
+                available = get_available_date(fum_dt, cutoff_hour)
+            else:
+                available = fum_dt.date()
+            return available.isoformat()
+        except ValueError:
+            pass
 
-    return available.isoformat()
+    # 2. Fall back to ETA date as planning estimate
+    eta = shipment.get('eta_fecha')
+    if eta:
+        try:
+            return date.fromisoformat(eta[:10]).isoformat()
+        except ValueError:
+            pass
+
+    return None

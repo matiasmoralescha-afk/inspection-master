@@ -681,13 +681,26 @@ def main() -> None:
                 db_mod.mark_processed(conn, message_id, thread_id)
                 conn.commit()
 
-    # Daily scan: notify for eta_overdue + reinspection_due across ALL open shipments
+    # Recompute derived fields for ALL open shipments every run
+    # (ensures dia_disponible_para_inspeccion is always fresh in Supabase,
+    #  even for shipments whose emails were processed in a previous run)
     if not args.dry_run:
         open_shipments = conn.execute(
             "SELECT * FROM shipments WHERE estado_general = 'abierto'"
         ).fetchall()
         for row in open_shipments:
-            notif.check_and_notify(dict(row), None, conn, service)
+            s = dict(row)
+            derived: dict = {}
+            dia = business_rules.calc_dia_disponible(s, clients_config)
+            if dia and dia != s.get('dia_disponible_para_inspeccion'):
+                derived['dia_disponible_para_inspeccion'] = dia
+            reinsp = business_rules.calc_reinspection_due_date(s, clients_config)
+            if reinsp and reinsp != s.get('reinspection_due_date'):
+                derived['reinspection_due_date'] = reinsp
+            if derived:
+                db_mod.update_derived_fields(conn, s['id'], derived)
+            notif.check_and_notify(s, None, conn, service)
+        conn.commit()
 
     # Sync to Sheets + Supabase (non-fatal)
     if not args.dry_run:
