@@ -31,6 +31,8 @@ from agent import notifications as notif
 from agent.parsers import ocean as ocean_parser
 from agent.parsers import inspection_report as ir_parser
 from agent.parsers import prime_time_pl as pl_parser
+from agent.parsers import greenfruit as gf_parser
+from agent.parsers import sq1 as sq1_parser
 
 load_dotenv()
 
@@ -70,10 +72,11 @@ def _get_msg_header(msg: dict, name: str) -> str:
 
 def _classify_message(msg: dict) -> str:
     """Return 'ocean_update', 'air_arrival', 'inspection_report',
-    'sq1_receiving_card', 'prime_time_pl', or 'unknown'."""
+    'sq1_receiving_card', 'prime_time_pl', 'greenfruit_arrival', or 'unknown'."""
     sender  = _get_msg_header(msg, 'From').lower()
     subject = _get_msg_header(msg, 'Subject')
     subject_upper = subject.upper()
+    to_cc   = (_get_msg_header(msg, 'To') + ' ' + _get_msg_header(msg, 'Cc')).lower()
 
     if ir_parser.SENDER in sender:
         return 'inspection_report'
@@ -85,6 +88,8 @@ def _classify_message(msg: dict) -> str:
         return 'sq1_receiving_card'
     if pl_parser.is_prime_time_pl(subject):
         return 'prime_time_pl'
+    if gf_parser.is_greenfruit_sender(sender, subject, to_cc):
+        return 'greenfruit_arrival'
     return 'unknown'
 
 
@@ -356,7 +361,7 @@ def main() -> None:
     ))
     sq1_query = _apply_time_window(os.environ.get(
         'SQ1_RECEIVING_CARD_QUERY',
-        'subject:"SQ1 Inspection Request" newer_than:7d',
+        'subject:"SQ1 Inspection Request" newer_than:30d',
     ))
     pl_query = _apply_time_window(os.environ.get(
         'PRIME_TIME_PL_QUERY',
@@ -368,7 +373,14 @@ def main() -> None:
     logger.info('Inspection report query: %s', ir_query)
     logger.info('Prime Time PL query: %s', pl_query)
 
-    threads = _collect_threads(service, [ocean_query, air_query, sq1_query, ir_query, pl_query])
+    gf_query = _apply_time_window(os.environ.get(
+        'GREENFRUIT_QUERY',
+        '(from:andrew@greenfruitavocados.com OR subject:"UPCOMING LOADS") newer_than:30d',
+    ))
+
+    logger.info('GreenFruit query: %s', gf_query)
+
+    threads = _collect_threads(service, [ocean_query, air_query, sq1_query, ir_query, pl_query, gf_query])
     logger.info('Total unique threads: %d', len(threads))
 
     stats = {
@@ -595,41 +607,105 @@ def main() -> None:
                             notif.check_and_notify(dict(saved), prev, conn, service)
 
             elif email_type == 'sq1_receiving_card':
+                # ── 1. Parse lot IDs from subject + body ─────────────────────
+                body_text = gmail_client.get_message_text(msg) or gmail_client.get_message_body(msg) or ''
+                sq1_rows = sq1_parser.parse(subject, body_text)
+
+                pdf_lot_norms: set[str] = set()
+
+                # ── 2. Also handle legacy PDF "RECEIVING CARD" attachments ───
                 attachments = gmail_client.get_attachments(service, msg)
                 pdfs = [a for a in attachments if a['mime_type'] == 'application/pdf']
-                if not pdfs:
-                    logger.debug('SQ1 Inspection Request has no PDF attachments: %s', message_id)
-                else:
-                    for att in pdfs:
-                        # Extract lot/PO from filename: "RECEIVING CARD DOL-2726.pdf" → "DOL-2726"
-                        fn_match = re.search(
-                            r'RECEIVING\s+CARD\s+(.+?)(?:\s+REVISED)?\.pdf',
-                            att['filename'], re.IGNORECASE,
-                        )
-                        if not fn_match:
-                            logger.warning('Could not parse lot from PDF filename: %s', att['filename'])
-                            continue
-                        lot_raw = fn_match.group(1).strip()
-                        po_norm = normalizers.normalize_po(lot_raw)
+                for att in pdfs:
+                    fn_match = re.search(
+                        r'RECEIVING\s+CARD\s+(.+?)(?:\s+REVISED)?\.pdf',
+                        att['filename'], re.IGNORECASE,
+                    )
+                    if not fn_match:
+                        logger.warning('SQ1: could not parse lot from PDF filename: %s', att['filename'])
+                        continue
+                    lot_raw = fn_match.group(1).strip()
+                    po_norm = normalizers.normalize_po(lot_raw)
+                    pdf_lot_norms.add(po_norm)
 
-                        lots_json = claude_client.extract_lots_from_pdf(att['data'], anthropic)
-                        if not lots_json:
-                            logger.warning('Could not extract lots from %s', att['filename'])
-                            continue
+                    lots_json = claude_client.extract_lots_from_pdf(att['data'], anthropic)
+                    if not lots_json:
+                        logger.warning('SQ1: could not extract lots from %s', att['filename'])
+                        continue
+
+                    if args.dry_run:
+                        logger.info('[DRY-RUN] SQ1 PDF: lot=%s po_norm=%s lots=%s',
+                                    lot_raw, po_norm, lots_json[:80])
+                    else:
+                        conn.execute(
+                            "UPDATE shipments SET lots_raw=? WHERE po_norm=? AND cliente_norm='SQUARE ONE'",
+                            (lots_json, po_norm),
+                        )
+                        conn.commit()
+
+                # ── 3. Upsert a shipment record for every lot found ──────────
+                if not sq1_rows:
+                    logger.warning('SQ1: no lots parsed from message %s (subject: %r)',
+                                   message_id, subject)
+                else:
+                    sq1_cliente_norm = normalizers.normalize_client_name('Square One')
+                    sq1_location     = _get_client_location('Square One', clients_config)
+
+                    for sq1_row in sq1_rows:
+                        lot_id  = sq1_row['lot_id']
+                        po_norm = normalizers.normalize_po(lot_id)
+
+                        unit_id      = sq1_row.get('unit_id')
+                        unit_id_norm = normalizers.normalize_unit_id(unit_id) if unit_id else None
+
+                        record: dict = {
+                            'cliente':                  'Square One',
+                            'cliente_norm':             sq1_cliente_norm,
+                            'tipo_carga':               'terrestre',
+                            'po':                       lot_id,
+                            'po_norm':                  po_norm,
+                            'unit_id':                  unit_id_norm,
+                            'unit_id_norm':             unit_id_norm,
+                            'eta_fecha':                sq1_row.get('eta_fecha'),
+                            'warehouse_arrival_confirmed': 1,
+                            'ready_for_inspection':     1,
+                            'location':                 sq1_location,
+                            'fuente':                   f'{thread_id}:{message_id}',
+                        }
 
                         if args.dry_run:
-                            logger.info('[DRY-RUN] SQ1 receiving card: lot=%s po_norm=%s lots=%s',
-                                        lot_raw, po_norm, lots_json[:80])
+                            logger.info('[DRY-RUN] SQ1: lot=%s container=%s eta=%s',
+                                        lot_id, unit_id_norm, sq1_row.get('eta_fecha'))
+                            stats['rows_inserted'] += 1
+                            continue
+
+                        prev   = _fetch_shipment(conn, sq1_cliente_norm, unit_id_norm, po_norm)
+                        result = db_mod.upsert_shipment(conn, record)
+                        conn.commit()
+
+                        if result == 'inserted':
+                            stats['rows_inserted'] += 1
+                            logger.info('SQ1: inserted lot %s (container=%s eta=%s)',
+                                        lot_id, unit_id_norm, sq1_row.get('eta_fecha'))
                         else:
-                            updated = conn.execute(
-                                "UPDATE shipments SET lots_raw=? WHERE po_norm=? AND cliente_norm='SQUARE ONE'",
-                                (lots_json, po_norm),
-                            ).rowcount
-                            conn.commit()
-                            if updated:
-                                logger.info('Updated lots_raw for SQ1 lot %s (%s rows)', lot_raw, updated)
-                            else:
-                                logger.warning('No shipment found for SQ1 lot %s (po_norm=%s)', lot_raw, po_norm)
+                            stats['rows_updated'] += 1
+                            logger.info('SQ1: updated lot %s', lot_id)
+
+                        saved = conn.execute(
+                            'SELECT * FROM shipments WHERE cliente_norm=? AND po_norm=?',
+                            (sq1_cliente_norm, po_norm),
+                        ).fetchone()
+                        if saved:
+                            derived: dict = {}
+                            dia_disp = business_rules.calc_dia_disponible(dict(saved), clients_config)
+                            if dia_disp:
+                                derived['dia_disponible'] = dia_disp
+                            reinsp = business_rules.calc_reinspection_due_date(dict(saved))
+                            if reinsp:
+                                derived['reinspection_due_date'] = reinsp
+                            if derived:
+                                db_mod.update_derived_fields(conn, saved['id'], derived)
+                            notif.check_and_notify(dict(saved), prev, conn, service)
 
             elif email_type == 'prime_time_pl':
                 parsed_subj = pl_parser.parse_subject(subject)
@@ -677,6 +753,87 @@ def main() -> None:
             else:
                 logger.debug('Unknown email type for message %s (subject: %r)', message_id, subject)
                 stats['rows_skipped'] += 1
+
+
+            elif email_type == 'greenfruit_arrival':
+                # Prefer plain text; fall back to HTML (parser handles both)
+                body = gmail_client.get_message_text(msg) or gmail_client.get_message_body(msg) or ''
+                if not body:
+                    logger.warning('GreenFruit: no body in message %s', message_id)
+                    if not args.dry_run:
+                        db_mod.mark_processed(conn, message_id, thread_id)
+                        conn.commit()
+                    continue
+
+                gf_rows = gf_parser.parse(body, subject)
+                if not gf_rows:
+                    logger.warning('GreenFruit parser: no rows from message %s (subject: %s)',
+                                   message_id, subject)
+                    if not args.dry_run:
+                        db_mod.mark_processed(conn, message_id, thread_id)
+                        conn.commit()
+                    continue
+
+                for gf_row in gf_rows:
+                    unit_id_norm = normalizers.normalize_unit_id(gf_row.get('unit_id'))
+                    if not unit_id_norm:
+                        logger.warning('GreenFruit row missing unit_id — skipping. row=%s', gf_row)
+                        stats['rows_skipped'] += 1
+                        continue
+
+                    po_raw  = gf_row.get('po')
+                    po_norm = normalizers.normalize_po(po_raw)
+
+                    country     = gf_row.get('country_of_origin')
+                    shipper_raw = gf_row.get('shipper')
+
+                    record: dict = {
+                        'cliente':          'GreenFruit',
+                        'cliente_norm':     normalizers.normalize_client_name('GreenFruit'),
+                        'tipo_carga':       'ocean',
+                        'unit_id':          unit_id_norm,
+                        'unit_id_norm':     unit_id_norm,
+                        'po':               po_raw,
+                        'po_norm':          po_norm,
+                        'shipper':          shipper_raw,
+                        'country_of_origin': country,
+                        'commodity':        'Avocado',
+                        'eta_fecha':        gf_row.get('eta_fecha'),
+                        'vessel':           gf_row.get('vessel'),
+                        'location':         _get_client_location('GreenFruit', clients_config),
+                        'fuente':           f'{thread_id}:{message_id}',
+                    }
+
+                    if args.dry_run:
+                        logger.info('[DRY-RUN] GreenFruit: container=%s po=%s eta=%s vessel=%s country=%s',
+                                    unit_id_norm, po_raw, gf_row.get('eta_fecha'),
+                                    gf_row.get('vessel'), country)
+                        stats['ocean_rows_inserted'] += 1
+                        continue
+
+                    prev   = _fetch_shipment(conn, record['cliente_norm'],
+                                             unit_id_norm, po_norm)
+                    result = db_mod.upsert_shipment(conn, record)
+                    if result == 'inserted':
+                        stats['ocean_rows_inserted'] += 1
+                    else:
+                        stats['ocean_rows_updated'] += 1
+
+                    saved = conn.execute(
+                        'SELECT * FROM shipments WHERE cliente_norm=? AND unit_id_norm=?',
+                        (record['cliente_norm'], unit_id_norm),
+                    ).fetchone()
+                    if saved:
+                        derived: dict = {}
+                        dia_disp = business_rules.calc_dia_disponible(dict(saved), clients_config)
+                        if dia_disp:
+                            derived['dia_disponible'] = dia_disp
+                        reinsp = business_rules.calc_reinspection_due_date(dict(saved))
+                        if reinsp:
+                            derived['reinspection_due_date'] = reinsp
+                        if derived:
+                            db_mod.update_derived_fields(conn, saved['id'], derived)
+                        notif.check_and_notify(dict(saved), prev, conn, service)
 
             if not args.dry_run:
                 db_mod.mark_processed(conn, message_id, thread_id)
