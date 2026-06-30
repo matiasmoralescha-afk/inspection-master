@@ -1,9 +1,58 @@
 'use client'
 
-import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import type { Shipment, DbNotification, Staff } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+
+// ─── theme ────────────────────────────────────────────────────────────────────
+
+function useTheme() {
+  const [dark, setDark] = useState(false)
+
+  useEffect(() => {
+    const saved = localStorage.getItem('eqa-theme')
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const isDark = saved ? saved === 'dark' : prefersDark
+    setDark(isDark)
+    document.documentElement.classList.toggle('dark', isDark)
+  }, [])
+
+  function toggle() {
+    setDark(prev => {
+      const next = !prev
+      document.documentElement.classList.toggle('dark', next)
+      localStorage.setItem('eqa-theme', next ? 'dark' : 'light')
+      return next
+    })
+  }
+
+  return { dark, toggle }
+}
+
+function ThemeToggle({ dark, toggle }: { dark: boolean; toggle: () => void }) {
+  return (
+    <button
+      onClick={toggle}
+      aria-label={dark ? 'Modo claro' : 'Modo oscuro'}
+      title={dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+      className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 transition-colors"
+    >
+      {dark ? (
+        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M17.657 17.657l-.707-.707M6.343 6.343l-.707-.707M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      ) : (
+        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+      )}
+    </button>
+  )
+}
 
 // ─── toast notifications ─────────────────────────────────────────────────────
 
@@ -30,15 +79,16 @@ function ToastList({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: num
       {toasts.map(t => (
         <div
           key={t.id}
-          className={`pointer-events-auto bg-white rounded-lg shadow-lg border border-slate-200 border-l-4 ${EVENT_COLORS[t.event_type]} px-4 py-3 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
+          className={`animate-toast-in pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 shadow-lg border-l-4 ${EVENT_COLORS[t.event_type]}`}
         >
           <div className="flex-1 min-w-0">
-            <p className="text-[13px] font-semibold text-slate-800">{EVENT_LABELS[t.event_type]}</p>
-            <p className="text-[12px] text-slate-500 mt-0.5 truncate">{t.message}</p>
+            <p className="text-[13px] font-semibold text-gray-800 dark:text-slate-100">{EVENT_LABELS[t.event_type]}</p>
+            <p className="text-[12px] text-gray-500 dark:text-slate-400 mt-0.5 truncate">{t.message}</p>
           </div>
           <button
             onClick={() => onDismiss(t.id)}
-            className="text-slate-400 hover:text-slate-700 text-lg leading-none shrink-0 mt-0.5"
+            aria-label="Cerrar notificacion"
+            className="text-gray-400 hover:text-gray-700 dark:text-slate-500 dark:hover:text-slate-200 text-lg leading-none shrink-0 mt-0.5"
           >✕</button>
         </div>
       ))}
@@ -129,12 +179,12 @@ function fmtDate(iso: string | null | undefined): string {
 }
 
 function gradeColor(grade: string | null | undefined): string {
-  if (!grade) return 'text-slate-400'
-  if (grade.startsWith('A')) return 'text-emerald-600 font-semibold'
-  if (grade.startsWith('B')) return 'text-amber-500 font-semibold'
-  if (grade.startsWith('C')) return 'text-orange-500 font-semibold'
-  if (grade.startsWith('D')) return 'text-red-600 font-semibold'
-  return 'text-slate-600'
+  if (!grade) return 'text-gray-400 dark:text-slate-500'
+  if (grade.startsWith('A')) return 'text-emerald-600 dark:text-emerald-400 font-semibold'
+  if (grade.startsWith('B')) return 'text-amber-500 dark:text-amber-400 font-semibold'
+  if (grade.startsWith('C')) return 'text-orange-500 dark:text-orange-400 font-semibold'
+  if (grade.startsWith('D')) return 'text-red-600 dark:text-red-400 font-semibold'
+  return 'text-gray-600 dark:text-slate-400'
 }
 
 // ─── column definitions ──────────────────────────────────────────────────────
@@ -152,50 +202,50 @@ const COLUMNS: Col[] = [
   {
     key: 'po', label: 'PO', defaultVisible: true,
     getValue: s => s.po ?? '',
-    render: s => <span className="font-mono text-[13px] font-medium text-slate-900">{s.po ?? '—'}</span>,
+    render: s => <span className="font-mono text-[13px] font-medium text-gray-900 dark:text-slate-100">{s.po ?? '—'}</span>,
   },
   {
     key: 'unit_id', label: 'Container', defaultVisible: true,
     getValue: s => s.unit_id ?? '',
-    render: s => <span className="font-mono text-[13px] text-slate-700">{s.unit_id ?? '—'}</span>,
+    render: s => <span className="font-mono text-[13px] text-gray-700 dark:text-slate-300">{s.unit_id ?? '—'}</span>,
   },
   {
     key: 'commodity', label: 'Commodity', defaultVisible: true,
     getValue: s => s.commodity ?? '',
-    render: s => <span className="text-[13px] text-slate-700">{s.commodity ?? '—'}</span>,
+    render: s => <span className="text-[13px] text-gray-700 dark:text-slate-300">{s.commodity ?? '—'}</span>,
   },
   {
     key: 'location', label: 'Location', defaultVisible: true,
     getValue: s => s.location ?? '',
     render: s => s.location
-      ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">{s.location}</span>
-      : <span className="text-slate-300">—</span>,
+      ? <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">{s.location}</span>
+      : <span className="text-gray-300 dark:text-slate-600">—</span>,
   },
   {
     key: 'shipper', label: 'Warehouse', defaultVisible: true,
     getValue: s => s.shipper ?? '',
-    render: s => <span className="text-[13px] text-slate-600 max-w-[160px] truncate block">{s.shipper ?? '—'}</span>,
+    render: s => <span className="text-[13px] text-gray-500 dark:text-slate-400 max-w-[160px] truncate block">{s.shipper ?? '—'}</span>,
     tdClass: 'max-w-[160px]',
   },
   {
     key: 'country_of_origin', label: 'Origin', defaultVisible: true,
     getValue: s => s.country_of_origin ?? '',
-    render: s => <span className="text-[13px] text-slate-600">{s.country_of_origin ?? '—'}</span>,
+    render: s => <span className="text-[13px] text-gray-500 dark:text-slate-400">{s.country_of_origin ?? '—'}</span>,
   },
   {
     key: 'cliente', label: 'Client', defaultVisible: true,
     getValue: s => s.cliente ?? '',
-    render: s => <span className="text-[13px] text-slate-800">{s.cliente}</span>,
+    render: s => <span className="text-[13px] font-medium text-gray-800 dark:text-slate-200">{s.cliente}</span>,
   },
   {
     key: 'vessel', label: 'Carrier', defaultVisible: false,
     getValue: s => s.vessel ?? '',
-    render: s => <span className="text-[13px] text-slate-500 uppercase tracking-wide">{s.vessel ? 'OCEAN' : '—'}</span>,
+    render: s => <span className="text-[13px] text-gray-400 dark:text-slate-500 uppercase tracking-wide">{s.vessel ? 'OCEAN' : '—'}</span>,
   },
   {
     key: 'bl', label: 'BL#', defaultVisible: false,
     getValue: s => s.bl ?? '',
-    render: s => <span className="font-mono text-[12px] text-slate-500">{s.bl ?? '—'}</span>,
+    render: s => <span className="font-mono text-[12px] text-gray-400 dark:text-slate-500">{s.bl ?? '—'}</span>,
   },
   {
     key: 'dia_disponible', label: 'Inspection Date', defaultVisible: true,
@@ -205,7 +255,7 @@ const COLUMNS: Col[] = [
   {
     key: 'pallets', label: 'Pallets', defaultVisible: true,
     getValue: s => s.pallets != null ? String(s.pallets) : '',
-    render: s => <span className="text-[13px] text-slate-600">{s.pallets ?? '—'}</span>,
+    render: s => <span className="text-[13px] text-gray-600 dark:text-slate-400">{s.pallets ?? '—'}</span>,
     tdClass: 'text-right',
   },
   {
@@ -227,8 +277,8 @@ const COLUMNS: Col[] = [
     key: 'inspector', label: 'Inspector', defaultVisible: false,
     getValue: s => s.inspector_id ? 'asignado' : '',
     render: s => s.inspector_id
-      ? <span className="inline-flex items-center gap-1 text-[13px] text-slate-600"><span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block shrink-0" />Asignado</span>
-      : <span className="text-slate-300 text-[13px]">—</span>,
+      ? <span className="inline-flex items-center gap-1 text-[13px] text-gray-600 dark:text-slate-400"><span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block shrink-0" />Asignado</span>
+      : <span className="text-gray-300 dark:text-slate-600 text-[13px]">—</span>,
   },
   {
     key: 'estado_general', label: 'Status', defaultVisible: true,
@@ -241,36 +291,56 @@ const COLUMNS: Col[] = [
 
 function InspDateCell({ s }: { s: Shipment }) {
   const eff = effectiveDate(s)
-  if (!eff) return <span className="text-slate-300 text-[13px]">—</span>
+  if (!eff) return <span className="text-gray-300 dark:text-slate-600 text-[13px]">—</span>
   const today = new Date().toISOString().slice(0, 10)
   const label = fmtDate(eff)
-  if (eff < today)  return <span className="text-[13px] text-red-500 font-medium">{label}</span>
-  if (eff === today) return <span className="text-[13px] text-amber-600 font-semibold">{label} ●</span>
-  return <span className="text-[13px] text-slate-700">{label}</span>
+  if (eff < today)  return <span className="text-[13px] text-red-500 dark:text-red-400 font-medium">{label}</span>
+  if (eff === today) return <span className="text-[13px] text-amber-600 dark:text-amber-400 font-semibold">{label} ●</span>
+  return <span className="text-[13px] text-gray-700 dark:text-slate-300">{label}</span>
 }
 
 function ReinspCell({ date, estado }: { date: string | null; estado: string }) {
-  if (!date || estado === 'cerrado') return <span className="text-slate-300 text-[13px]">—</span>
+  if (!date || estado === 'cerrado') return <span className="text-gray-300 dark:text-slate-600 text-[13px]">—</span>
   const today = new Date().toISOString().slice(0, 10)
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
   const label = fmtDate(date)
-  if (date < today)  return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-700">⚠ {label}</span>
-  if (date === today) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-600">HOY</span>
-  if (date === tomorrow) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 text-amber-700">Mañana</span>
-  return <span className="text-[13px] text-slate-500">{label}</span>
+  if (date < today)  return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400">⚠ {label}</span>
+  if (date === today) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400">HOY</span>
+  if (date === tomorrow) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Mañana</span>
+  return <span className="text-[13px] text-gray-500 dark:text-slate-400">{label}</span>
 }
 
 function StatusBadge({ s }: { s: Shipment }) {
   if (s.estado_general === 'cerrado') {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-500 uppercase tracking-wide">Done</span>
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500 dark:text-slate-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-gray-400 dark:bg-slate-500" />
+        Done
+      </span>
+    )
   }
   if (s.ready_for_inspection === 1) {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700 uppercase tracking-wide">Ready</span>
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/30 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700 dark:text-emerald-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        Ready
+      </span>
+    )
   }
   if (s.inspection_status === 'programada') {
-    return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-700 uppercase tracking-wide">Scheduled</span>
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-900/30 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-400">
+        <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+        Scheduled
+      </span>
+    )
   }
-  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-700 uppercase tracking-wide">Pending</span>
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/30 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700 dark:text-amber-400">
+      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+      Pending
+    </span>
+  )
 }
 
 // ─── filter chip ──────────────────────────────────────────────────────────────
@@ -300,15 +370,16 @@ function Chip({
   if (isSearch) {
     return (
       <div className="relative flex items-center">
-        <svg className="absolute left-2.5 w-3.5 h-3.5 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="pointer-events-none absolute left-3 h-4 w-4 text-gray-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
         </svg>
         <input
           type="text"
           placeholder={label}
+          aria-label={label}
           value={value}
           onChange={e => onChange(e.target.value)}
-          className="pl-8 pr-3 py-1.5 text-[13px] border border-slate-200 rounded-full bg-white text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-44"
+          className="w-full min-w-[200px] rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2 pl-9 pr-4 text-[13px] text-gray-700 dark:text-slate-200 placeholder:text-gray-400 dark:placeholder:text-slate-500 outline-none transition focus:border-gray-400 dark:focus:border-slate-500 focus:ring-2 focus:ring-gray-100 dark:focus:ring-slate-700 sm:w-52"
         />
       </div>
     )
@@ -318,23 +389,24 @@ function Chip({
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-full border transition-colors ${
+        aria-expanded={open}
+        className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[13px] font-medium transition-colors ${
           isActive
-            ? 'bg-slate-900 text-white border-slate-900'
-            : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400 hover:text-slate-800'
+            ? 'border-gray-900 dark:border-slate-200 bg-gray-900 dark:bg-slate-100 text-white dark:text-slate-900'
+            : 'border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:border-gray-300 dark:hover:border-slate-600 hover:text-gray-900 dark:hover:text-slate-100'
         }`}
       >
         {isActive ? `${label}: ${value}` : label}
-        <svg className="w-3 h-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="h-3 w-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
 
       {open && options && (
-        <div className="absolute top-full left-0 mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+        <div className="absolute left-0 top-full z-50 mt-1.5 min-w-[160px] rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 shadow-lg">
           <button
             onClick={() => { onChange(''); setOpen(false) }}
-            className="w-full text-left px-3 py-1.5 text-[13px] text-slate-500 hover:bg-slate-50"
+            className="w-full rounded-lg px-3 py-2 text-left text-[13px] text-gray-400 dark:text-slate-500 hover:bg-gray-50 dark:hover:bg-slate-700"
           >
             Todos
           </button>
@@ -342,8 +414,8 @@ function Chip({
             <button
               key={o}
               onClick={() => { onChange(o); setOpen(false) }}
-              className={`w-full text-left px-3 py-1.5 text-[13px] hover:bg-slate-50 ${
-                value === o ? 'text-slate-900 font-medium' : 'text-slate-600'
+              className={`w-full rounded-lg px-3 py-2 text-left text-[13px] hover:bg-gray-50 dark:hover:bg-slate-700 ${
+                value === o ? 'text-gray-900 dark:text-slate-100 font-medium' : 'text-gray-600 dark:text-slate-300'
               }`}
             >
               {o}
@@ -373,38 +445,38 @@ function ColPicker({ visible, onChange, onResetOrder }: { visible: Set<string>; 
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[13px] rounded-full border border-slate-200 bg-white text-slate-600 hover:border-slate-400"
+        aria-expanded={open}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[13px] font-medium text-gray-600 dark:text-slate-300 hover:border-gray-300 dark:hover:border-slate-600"
       >
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-            d="M4 6h16M4 12h16M4 18h7" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
         </svg>
         Columnas
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg p-3 w-52">
-          <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Mostrar columnas</p>
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-52 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-2 shadow-lg">
+          <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-400 dark:text-slate-500">Columnas</p>
           <div className="space-y-0.5 max-h-72 overflow-y-auto">
             {COLUMNS.map(col => (
-              <label key={col.key} className="flex items-center gap-2 py-1 px-1 cursor-pointer hover:bg-slate-50 rounded text-[13px] text-slate-700">
+              <label key={col.key} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-[13px] text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700">
                 <input
                   type="checkbox"
                   checked={visible.has(col.key)}
                   onChange={e => onChange(col.key, e.target.checked)}
-                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-3.5 h-3.5"
+                  className="rounded border-gray-300 dark:border-slate-600 w-3.5 h-3.5"
                 />
                 {col.label}
               </label>
             ))}
           </div>
-          <div className="border-t border-slate-100 mt-2 pt-2 flex gap-2">
-            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, true))} className="text-[12px] text-blue-600 hover:underline">Todas</button>
-            <span className="text-slate-300">·</span>
-            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))} className="text-[12px] text-slate-400 hover:underline">Reset cols</button>
+          <div className="mt-2 flex gap-2 border-t border-gray-100 dark:border-slate-700 pt-2">
+            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, true))} className="text-[12px] text-blue-600 dark:text-blue-400 hover:underline">Todas</button>
+            <span className="text-gray-300 dark:text-slate-600">·</span>
+            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))} className="text-[12px] text-gray-400 dark:text-slate-500 hover:underline">Reset cols</button>
             {onResetOrder && (
               <>
-                <span className="text-slate-300">·</span>
-                <button onClick={onResetOrder} className="text-[12px] text-slate-400 hover:underline">Reset orden</button>
+                <span className="text-gray-300 dark:text-slate-600">·</span>
+                <button onClick={onResetOrder} className="text-[12px] text-gray-400 dark:text-slate-500 hover:underline">Reset orden</button>
               </>
             )}
           </div>
@@ -414,14 +486,58 @@ function ColPicker({ visible, onChange, onResetOrder }: { visible: Set<string>; 
   )
 }
 
-// ─── sidebar ──────────────────────────────────────────────────────────────────
+// ─── sidebar nav item ─────────────────────────────────────────────────────────
 
-function SidebarIcon({ active, children }: { active?: boolean; children: React.ReactNode }) {
+function NavItem({
+  active, children, href, label,
+}: {
+  active?: boolean
+  children: React.ReactNode
+  href?: string
+  label: string
+}) {
+  const cls = `flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
+    active
+      ? 'bg-gray-100 dark:bg-slate-800 text-gray-900 dark:text-slate-100 font-medium'
+      : 'text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800/60 hover:text-gray-900 dark:hover:text-slate-100'
+  }`
+  const content = (
+    <div className={cls}>
+      <span className={`shrink-0 ${active ? 'text-gray-700 dark:text-slate-300' : 'text-gray-400 dark:text-slate-500'}`}>
+        {children}
+      </span>
+      <span>{label}</span>
+    </div>
+  )
+  if (href) return <Link href={href}>{content}</Link>
+  return content
+}
+
+// ─── stat cards ───────────────────────────────────────────────────────────────
+
+type StatTone = 'amber' | 'blue' | 'emerald' | 'slate'
+
+function StatCard({ hint, label, tone, value }: { hint: string; label: string; tone: StatTone; value: number }) {
+  const dotMap: Record<StatTone, string> = {
+    amber:   'bg-amber-400',
+    blue:    'bg-sky-400',
+    emerald: 'bg-emerald-400',
+    slate:   'bg-gray-400 dark:bg-slate-500',
+  }
+  const numMap: Record<StatTone, string> = {
+    amber:   'text-amber-600 dark:text-amber-400',
+    blue:    'text-sky-600 dark:text-sky-400',
+    emerald: 'text-emerald-600 dark:text-emerald-400',
+    slate:   'text-gray-700 dark:text-slate-300',
+  }
   return (
-    <div className={`w-9 h-9 flex items-center justify-center rounded-lg cursor-pointer transition-colors ${
-      active ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white hover:bg-white/10'
-    }`}>
-      {children}
+    <div className="rounded-xl border border-gray-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/50 px-4 py-3">
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400 dark:text-slate-500">{label}</p>
+        <span className={`h-2 w-2 rounded-full ${dotMap[tone]}`} />
+      </div>
+      <p className={`text-2xl font-semibold tabular-nums ${numMap[tone]}`}>{value}</p>
+      <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5">{hint}</p>
     </div>
   )
 }
@@ -433,7 +549,6 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) =>
   const [dirty,  setDirty]  = useState(false)
   const [saving, setSaving] = useState<string | null>(null)
 
-  // If parent refreshes (s changes identity), re-sync only when panel is clean
   useEffect(() => { if (!dirty) setLocal(s) }, [s, dirty])
 
   const today = new Date().toISOString().slice(0, 10)
@@ -453,44 +568,42 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) =>
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end" onClick={() => onClose(dirty)}>
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30 dark:bg-black/50 backdrop-blur-sm" onClick={() => onClose(dirty)}>
       <div
-        className="w-full max-w-md bg-white shadow-2xl flex flex-col overflow-y-auto"
+        className="flex w-full max-w-[34rem] flex-col overflow-y-auto bg-white dark:bg-slate-900 shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         {/* header */}
-        <div className="bg-slate-900 px-5 py-4 flex items-start justify-between">
+        <div className="border-b border-gray-200 dark:border-slate-700 px-5 py-4 flex items-start justify-between bg-gray-50 dark:bg-slate-800/50">
           <div>
-            <p className="text-[11px] text-slate-400 uppercase tracking-wider font-medium">{local.cliente}</p>
-            <h2 className="text-base font-bold text-white mt-0.5 font-mono">{local.unit_id ?? local.po ?? '—'}</h2>
-            {local.po && local.unit_id && <p className="text-[12px] text-slate-400 mt-0.5 font-mono">PO: {local.po}</p>}
+            <p className="text-[11px] text-gray-400 dark:text-slate-500 uppercase tracking-wider font-medium">{local.cliente}</p>
+            <h2 className="text-base font-bold text-gray-900 dark:text-slate-100 mt-0.5 font-mono">{local.unit_id ?? local.po ?? '—'}</h2>
+            {local.po && local.unit_id && <p className="text-[12px] text-gray-400 dark:text-slate-500 mt-0.5 font-mono">PO: {local.po}</p>}
           </div>
           <div className="flex items-center gap-2">
-            {saving && <span className="text-[11px] text-slate-400 animate-pulse">Guardando…</span>}
-            {dirty && !saving && <span className="text-[11px] text-emerald-400">✓ Guardado</span>}
-            <button onClick={() => onClose(dirty)} className="text-slate-400 hover:text-white text-lg leading-none">✕</button>
+            {saving && <span className="text-[11px] text-gray-400 dark:text-slate-500 animate-pulse">Guardando…</span>}
+            {dirty && !saving && <span className="text-[11px] text-emerald-500">✓ Guardado</span>}
+            <button aria-label="Cerrar panel" onClick={() => onClose(dirty)} className="text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-200 text-lg leading-none">✕</button>
           </div>
         </div>
 
         {/* status strip */}
-        <div className="px-5 py-3 border-b border-slate-100 flex items-center gap-3">
+        <div className="px-5 py-3 border-b border-gray-200 dark:border-slate-700 flex items-center gap-3">
           <StatusBadge s={local} />
           {eff && (
-            <span className={`text-[13px] ${eff < today ? 'text-red-500 font-medium' : eff === today ? 'text-amber-600 font-semibold' : 'text-slate-500'}`}>
+            <span className={`text-[13px] ${eff < today ? 'text-red-500 dark:text-red-400 font-medium' : eff === today ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-gray-500 dark:text-slate-400'}`}>
               {eff === today ? 'Hoy — ' : ''}{fmtDate(eff)}
             </span>
           )}
           {local.location && (
-            <span className="ml-auto text-[11px] font-medium bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{local.location}</span>
+            <span className="ml-auto text-[11px] font-medium bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 px-2 py-0.5 rounded">{local.location}</span>
           )}
         </div>
 
         {/* body */}
         <div className="flex-1 px-5 py-4 space-y-5">
-
-          {/* status overrides */}
           <section>
-            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Estado</p>
+            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Estado</p>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
               <EField label="Estado general" value={local.estado_general} onSave={sv('estado_general')}
                 options={[{value:'abierto',label:'Abierto'},{value:'cerrado',label:'Cerrado'}]} />
@@ -499,9 +612,8 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) =>
             </dl>
           </section>
 
-          {/* shipment info */}
-          <section className="border-t border-slate-100 pt-4">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Envío</p>
+          <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
+            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Envío</p>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
               <EField label="Commodity"   value={local.commodity}       onSave={sv('commodity')} />
               <EField label="País origen" value={local.country_of_origin} onSave={sv('country_of_origin')} />
@@ -519,9 +631,8 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) =>
             </dl>
           </section>
 
-          {/* customs statuses */}
-          <section className="border-t border-slate-100 pt-4">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Estatus aduanas</p>
+          <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
+            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Estatus aduanas</p>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
               <EField label="FDA"        value={local.fda_status}               onSave={sv('fda_status')} />
               <EField label="Customs"    value={local.customs_status}            onSave={sv('customs_status')} />
@@ -530,28 +641,27 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) =>
             </dl>
           </section>
 
-          {/* inspection results */}
           {(local.overall_grade || local.condition_text || local.quality_text) && (
-            <section className="border-t border-slate-100 pt-4">
-              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Resultado</p>
+            <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
+              <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Resultado</p>
               {local.overall_grade && (
                 <p className={`text-2xl font-bold mb-2 ${gradeColor(local.overall_grade)}`}>Grade {local.overall_grade}</p>
               )}
               {local.condition_text && (
                 <div className="mb-2">
-                  <p className="text-[11px] text-slate-400 mb-0.5">Condición</p>
-                  <p className="text-[13px] text-slate-700 leading-relaxed">{local.condition_text}</p>
+                  <p className="text-[11px] text-gray-400 dark:text-slate-500 mb-0.5">Condición</p>
+                  <p className="text-[13px] text-gray-700 dark:text-slate-300 leading-relaxed">{local.condition_text}</p>
                 </div>
               )}
               {local.quality_text && (
                 <div className="mb-2">
-                  <p className="text-[11px] text-slate-400 mb-0.5">Calidad</p>
-                  <p className="text-[13px] text-slate-700 leading-relaxed">{local.quality_text}</p>
+                  <p className="text-[11px] text-gray-400 dark:text-slate-500 mb-0.5">Calidad</p>
+                  <p className="text-[13px] text-gray-700 dark:text-slate-300 leading-relaxed">{local.quality_text}</p>
                 </div>
               )}
               {local.report_url && (
                 <a href={local.report_url} target="_blank" rel="noopener noreferrer"
-                   className="inline-flex items-center gap-1 text-[13px] text-blue-600 hover:underline mt-1">
+                   className="inline-flex items-center gap-1 text-[13px] text-blue-600 dark:text-blue-400 hover:underline mt-1">
                   Ver reporte completo
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -561,23 +671,19 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) =>
             </section>
           )}
 
-          {/* lots */}
           {local.lots_raw && (
-            <section className="border-t border-slate-100 pt-4">
-              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Lots</p>
-              <pre className="text-[12px] text-slate-700 bg-slate-50 rounded-md p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{local.lots_raw}</pre>
+            <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
+              <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Lots</p>
+              <pre className="text-[12px] text-gray-700 dark:text-slate-300 bg-gray-50 dark:bg-slate-800 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{local.lots_raw}</pre>
             </section>
           )}
 
-          {/* inspector assignment */}
           <InspectorDropdown shipment={local} />
 
-          {/* comments */}
-          <section className="border-t border-slate-100 pt-4">
-            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Comentarios</p>
+          <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
+            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Comentarios</p>
             <EField label="" value={local.comments_raw} onSave={sv('comments_raw')} multiline />
           </section>
-
         </div>
       </div>
     </div>
@@ -587,8 +693,8 @@ function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) =>
 function DetailKV({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <div>
-      <dt className="text-[11px] text-slate-400">{label}</dt>
-      <dd className="text-[13px] text-slate-800 mt-0.5">{value || '—'}</dd>
+      <dt className="text-[11px] text-gray-400 dark:text-slate-500">{label}</dt>
+      <dd className="text-[13px] text-gray-800 dark:text-slate-200 mt-0.5">{value || '—'}</dd>
     </div>
   )
 }
@@ -620,11 +726,11 @@ function EField({
     if (e.key === 'Escape') cancel()
   }
 
-  const inputCls = 'w-full text-[13px] border border-blue-300 rounded px-1.5 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500'
+  const inputCls = 'w-full text-[13px] border border-blue-300 dark:border-blue-600 rounded px-1.5 py-0.5 bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500'
 
   return (
     <div className="group">
-      <dt className="text-[11px] text-slate-400 flex items-center gap-1">
+      <dt className="text-[11px] text-gray-400 dark:text-slate-500 flex items-center gap-1">
         {label}
         {!editing && (
           <button
@@ -675,11 +781,11 @@ function EField({
           )
         ) : (
           <span
-            className="text-[13px] text-slate-800 block py-0.5 cursor-text hover:bg-blue-50 rounded -mx-0.5 px-0.5 transition-colors"
+            className="text-[13px] text-gray-800 dark:text-slate-200 block py-0.5 cursor-text hover:bg-gray-50 dark:hover:bg-slate-700/50 rounded -mx-0.5 px-0.5 transition-colors"
             onDoubleClick={() => setEditing(true)}
             title="Doble clic para editar"
           >
-            {value != null && value !== '' ? String(value) : <span className="text-slate-300">—</span>}
+            {value != null && value !== '' ? String(value) : <span className="text-gray-300 dark:text-slate-600">—</span>}
           </span>
         )}
       </dd>
@@ -711,13 +817,13 @@ function InspectorDropdown({ shipment }: { shipment: Shipment }) {
   }
 
   return (
-    <div className="border-t border-slate-100 pt-4">
-      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Inspector</p>
+    <div className="border-t border-gray-100 dark:border-slate-800 pt-4">
+      <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Inspector</p>
       <select
         value={inspectorId ?? ''}
         onChange={handleChange}
         disabled={saving}
-        className="w-full text-[13px] border border-slate-200 rounded-md px-2.5 py-1.5 text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+        className="w-full text-[13px] border border-gray-200 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-gray-800 dark:text-slate-200 bg-white dark:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
       >
         <option value="">Sin asignar</option>
         {staff.map(m => (
@@ -726,7 +832,7 @@ function InspectorDropdown({ shipment }: { shipment: Shipment }) {
           </option>
         ))}
       </select>
-      {saving && <p className="text-[11px] text-slate-400 mt-1">Guardando…</p>}
+      {saving && <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">Guardando…</p>}
     </div>
   )
 }
@@ -745,7 +851,6 @@ function NotificationBell() {
       .then(({ data }) => setHistory((data ?? []) as DbNotification[]))
   }, [])
 
-  // Refresh list when panel opens
   function handleOpen() {
     setOpen(o => !o)
     supabase
@@ -776,10 +881,12 @@ function NotificationBell() {
     <div ref={ref} className="relative">
       <button
         onClick={handleOpen}
-        className="relative p-1 rounded text-slate-500 hover:text-white transition-colors"
+        aria-expanded={open}
+        aria-label="Abrir notificaciones"
+        className="relative rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-gray-500 dark:text-slate-400 transition hover:text-gray-900 dark:hover:text-slate-100"
         title="Notificaciones"
       >
-        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
             d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
         </svg>
@@ -791,22 +898,22 @@ function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg w-80">
-          <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between">
-            <p className="text-[12px] font-semibold text-slate-700">Notificaciones</p>
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-80 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg">
+          <div className="flex items-center justify-between border-b border-gray-100 dark:border-slate-700 px-3 py-2">
+            <p className="text-[12px] font-semibold text-gray-700 dark:text-slate-200">Notificaciones</p>
             {todayCount > 0 && (
-              <span className="text-[10px] font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">{todayCount} hoy</span>
+              <span className="text-[10px] font-medium bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 px-1.5 py-0.5 rounded-full">{todayCount} hoy</span>
             )}
           </div>
-          <div className="max-h-72 overflow-y-auto divide-y divide-slate-50">
+          <div className="max-h-72 overflow-y-auto divide-y divide-gray-50 dark:divide-slate-700">
             {history.length === 0 ? (
-              <p className="py-8 text-center text-[13px] text-slate-400">Sin notificaciones</p>
+              <p className="py-8 text-center text-[13px] text-gray-400 dark:text-slate-500">Sin notificaciones</p>
             ) : history.map(n => (
-              <div key={n.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-slate-50">
+              <div key={n.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-slate-700/50">
                 <span className="text-base leading-none mt-0.5 shrink-0">{eventIcon(n.event_type)}</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[12px] text-slate-700 leading-snug">{n.message}</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">{timeAgo(n.sent_at)}</p>
+                  <p className="text-[12px] text-gray-700 dark:text-slate-300 leading-snug">{n.message}</p>
+                  <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5">{timeAgo(n.sent_at)}</p>
                 </div>
               </div>
             ))}
@@ -825,63 +932,65 @@ function BriefingCard({ s, onClick }: { s: Shipment; onClick: () => void }) {
   const isReady  = s.ready_for_inspection === 1
   const isOverdue = eff != null && eff < today
 
-  const clientColor = isOverdue ? 'text-red-600' : isReady ? 'text-emerald-600' : 'text-slate-500'
-
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
-      className={`bg-white rounded-xl border p-4 cursor-pointer transition-all hover:shadow-md hover:-translate-y-px active:scale-[0.99] ${
-        isOverdue ? 'border-red-200 bg-red-50/40' : isReady ? 'border-emerald-200' : 'border-slate-200'
+      className={`group relative block w-full overflow-hidden rounded-xl border bg-white dark:bg-slate-800 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md active:scale-[0.998] ${
+        isOverdue
+          ? 'border-red-200 dark:border-red-800'
+          : isReady
+          ? 'border-emerald-200 dark:border-emerald-800'
+          : 'border-gray-200 dark:border-slate-700'
       }`}
     >
+      <div className={`absolute inset-x-0 top-0 h-0.5 ${
+        isOverdue ? 'bg-red-500' : isReady ? 'bg-emerald-500' : 'bg-gray-200 dark:bg-slate-700'
+      }`} />
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="min-w-0">
-          <p className={`text-[10px] font-bold uppercase tracking-wider ${clientColor}`}>{s.cliente}</p>
-          <p className="font-mono text-[14px] font-bold text-slate-900 mt-0.5 truncate">{s.unit_id ?? s.po ?? '—'}</p>
-          {s.po && s.unit_id && <p className="font-mono text-[11px] text-slate-400 truncate">PO {s.po}</p>}
+          <p className={`text-[10px] font-bold uppercase tracking-wider ${
+            isOverdue ? 'text-red-600 dark:text-red-400' : isReady ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-slate-400'
+          }`}>{s.cliente}</p>
+          <p className="font-mono text-[14px] font-bold text-gray-900 dark:text-slate-100 mt-0.5 truncate">{s.unit_id ?? s.po ?? '—'}</p>
+          {s.po && s.unit_id && <p className="font-mono text-[11px] text-gray-400 dark:text-slate-500 truncate">PO {s.po}</p>}
         </div>
         <StatusBadge s={s} />
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 mt-2">
-        {s.commodity && <span className="text-[12px] text-slate-700">{s.commodity}</span>}
+        {s.commodity && <span className="text-[12px] text-gray-700 dark:text-slate-300">{s.commodity}</span>}
         {s.location && (
-          <span className="text-[11px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded-full">{s.location}</span>
+          <span className="text-[11px] bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 px-1.5 py-0.5 rounded">{s.location}</span>
         )}
-        {s.pallets != null && <span className="text-[11px] text-slate-400">{s.pallets} plt</span>}
+        {s.pallets != null && <span className="text-[11px] text-gray-400 dark:text-slate-500">{s.pallets} plt</span>}
       </div>
 
       {(s.fda_status || s.fumigation_status || s.agriculture_usda_status) && (
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-2.5 pt-2.5 border-t border-slate-100">
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-2.5 pt-2.5 border-t border-gray-100 dark:border-slate-700">
           {s.fda_status && (
             <span className={`text-[11px] font-medium ${
-              s.fda_status.toUpperCase().includes('RELEAS') ? 'text-emerald-600' : 'text-amber-600'
-            }`}>
-              FDA: {s.fda_status}
-            </span>
+              s.fda_status.toUpperCase().includes('RELEAS') ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+            }`}>FDA: {s.fda_status}</span>
           )}
           {s.fumigation_status && (
             <span className={`text-[11px] ${
               s.fumigation_status.toUpperCase().includes('CLEAR') || s.fumigation_status.toUpperCase().includes('DONE')
-                ? 'text-emerald-600' : 'text-amber-500'
-            }`}>
-              Fum: {s.fumigation_status}
-            </span>
+                ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-500 dark:text-amber-400'
+            }`}>Fum: {s.fumigation_status}</span>
           )}
           {s.agriculture_usda_status && (
             <span className={`text-[11px] ${
-              s.agriculture_usda_status.toUpperCase().includes('CLEAR') ? 'text-emerald-600' : 'text-amber-500'
-            }`}>
-              Ag: {s.agriculture_usda_status}
-            </span>
+              s.agriculture_usda_status.toUpperCase().includes('CLEAR') ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-500 dark:text-amber-400'
+            }`}>Ag: {s.agriculture_usda_status}</span>
           )}
         </div>
       )}
 
       {s.shipper && (
-        <p className="text-[11px] text-slate-400 mt-1.5 truncate">{s.shipper}</p>
+        <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1.5 truncate">{s.shipper}</p>
       )}
-    </div>
+    </button>
   )
 }
 
@@ -894,61 +1003,59 @@ function BriefingPanel({ shipments, onSelect }: { shipments: Shipment[]; onSelec
       key: 'overdue',
       label: 'Atrasado',
       sublabel: 'ETA pasada sin inspeccionar',
-      headerCls: 'text-red-700 bg-red-50 border-red-200',
+      headerCls: 'text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800',
       items: shipments.filter(s => { const e = effectiveDate(s); return e && e < today }),
     },
     {
       key: 'today',
       label: `Hoy — ${fmtDate(today)}`,
       sublabel: null,
-      headerCls: 'text-amber-700 bg-amber-50 border-amber-200',
+      headerCls: 'text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800',
       items: shipments.filter(s => effectiveDate(s) === today),
     },
     {
       key: 'tomorrow',
       label: `Mañana — ${fmtDate(tomorrow)}`,
       sublabel: null,
-      headerCls: 'text-blue-700 bg-blue-50 border-blue-200',
+      headerCls: 'text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
       items: shipments.filter(s => effectiveDate(s) === tomorrow),
     },
   ].filter(g => g.items.length > 0)
 
   if (groups.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 pb-20">
-        <svg className="w-12 h-12 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="flex flex-col items-center justify-center gap-3 py-16">
+        <svg className="w-10 h-10 text-gray-200 dark:text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
             d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <p className="text-[14px] font-medium text-slate-400">Sin inspecciones para hoy ni mañana</p>
+        <p className="text-[14px] text-gray-400 dark:text-slate-500">Sin inspecciones para hoy ni mañana</p>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 overflow-auto px-6 pb-6 min-h-0">
-      <div className="space-y-8">
-        {groups.map(group => (
-          <div key={group.key}>
-            <div className="flex items-center gap-3 mb-3">
-              <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[12px] font-semibold border ${group.headerCls}`}>
-                {group.label}
-                <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/60 text-[10px] font-bold">
-                  {group.items.length}
-                </span>
+    <div className="space-y-7">
+      {groups.map(group => (
+        <div key={group.key}>
+          <div className="flex items-center gap-3 mb-3">
+            <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-[12px] font-semibold border ${group.headerCls}`}>
+              {group.label}
+              <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-white/60 dark:bg-black/20 text-[10px] font-bold">
+                {group.items.length}
               </span>
-              {group.sublabel && (
-                <span className="text-[12px] text-slate-400">{group.sublabel}</span>
-              )}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {group.items.map(s => (
-                <BriefingCard key={s.id} s={s} onClick={() => onSelect(s)} />
-              ))}
-            </div>
+            </span>
+            {group.sublabel && (
+              <span className="text-[12px] text-gray-400 dark:text-slate-500">{group.sublabel}</span>
+            )}
           </div>
-        ))}
-      </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {group.items.map(s => (
+              <BriefingCard key={s.id} s={s} onClick={() => onSelect(s)} />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -961,17 +1068,21 @@ type SortState = { key: string; dir: 'asc' | 'desc' } | null
 
 export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const router = useRouter()
+  const { dark, toggle: toggleTheme } = useTheme()
   const [refreshing, setRefreshing] = useState(false)
-  const handleShipmentChange = useCallback(() => { router.refresh() }, [router])
+  const handleShipmentChange = useCallback(() => {
+    startTransition(() => { router.refresh() })
+  }, [router])
   const { toasts, dismiss } = useRealtimeNotifications(handleShipmentChange)
 
   // filters
-  const [search,         setSearch]         = useState('')
-  const [filterCliente,  setCliente]        = useState('')
-  const [filterEstado,   setEstado]         = useState('abierto')
-  const [filterCommodity,setCommodity]      = useState('')
-  const [filterLocation, setLocation]       = useState('')
-  const [filterHoy,      setFilterHoy]      = useState(false)
+  const [search,          setSearch]    = useState('')
+  const [filterCliente,   setCliente]   = useState('')
+  const [filterEstado,    setEstado]    = useState('abierto')
+  const [filterCommodity, setCommodity] = useState('')
+  const [filterLocation,  setLocation]  = useState('')
+  const [filterHoy,       setFilterHoy] = useState(false)
+  const deferredSearch = useDeferredValue(search)
 
   // ui state
   const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
@@ -981,7 +1092,6 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const [selected,    setSelected]    = useState<Shipment | null>(null)
   const dragColKey = useRef<string | null>(null)
 
-  // load profile from localStorage on mount
   useEffect(() => {
     const p = loadProfile()
     if (!p) return
@@ -999,7 +1109,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
 
   async function handleRefresh() {
     setRefreshing(true)
-    router.refresh()
+    startTransition(() => { router.refresh() })
     setTimeout(() => setRefreshing(false), 1500)
   }
 
@@ -1012,20 +1122,16 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     })
   }
 
-  function handleColDragStart(key: string) {
-    dragColKey.current = key
-  }
+  function handleColDragStart(key: string) { dragColKey.current = key }
 
   function handleColDrop(targetKey: string) {
     const from = dragColKey.current
     if (!from || from === targetKey) return
     setColOrder(prev => {
       const next = [...prev]
-      const fi = next.indexOf(from)
-      const ti = next.indexOf(targetKey)
+      const fi = next.indexOf(from), ti = next.indexOf(targetKey)
       if (fi === -1 || ti === -1) return prev
-      next.splice(fi, 1)
-      next.splice(ti, 0, from)
+      next.splice(fi, 1); next.splice(ti, 0, from)
       saveProfile(next, [...visibleCols])
       return next
     })
@@ -1048,14 +1154,11 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     [colOrder, visibleCols],
   )
 
-  // unique lists for filter chips
-  const clientes = useMemo(() => [...new Set(shipments.map(s => s.cliente))].sort(), [shipments])
+  const clientes    = useMemo(() => [...new Set(shipments.map(s => s.cliente))].sort(), [shipments])
   const commodities = useMemo(() => [...new Set(shipments.map(s => s.commodity).filter(Boolean) as string[])].sort(), [shipments])
-  const locations = useMemo(() => [...new Set(shipments.map(s => s.location).filter(Boolean) as string[])].sort(), [shipments])
+  const locations   = useMemo(() => [...new Set(shipments.map(s => s.location).filter(Boolean) as string[])].sort(), [shipments])
 
-  // stats
   const stats = useMemo(() => {
-    const today    = new Date().toISOString().slice(0, 10)
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
     return {
       total:    shipments.length,
@@ -1070,17 +1173,16 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     }
   }, [shipments])
 
-  // cascading column options
   const colOptions = useMemo(() => {
     const opts: Record<string, string[]> = {}
     for (const col of COLUMNS) {
       const rows = shipments.filter(s => {
-        if (filterCliente  && s.cliente !== filterCliente) return false
-        if (filterEstado   && s.estado_general !== filterEstado) return false
+        if (filterCliente   && s.cliente !== filterCliente) return false
+        if (filterEstado    && s.estado_general !== filterEstado) return false
         if (filterCommodity && s.commodity !== filterCommodity) return false
-        if (filterLocation && s.location !== filterLocation) return false
-        if (search) {
-          const q = search.toLowerCase()
+        if (filterLocation  && s.location !== filterLocation) return false
+        if (deferredSearch) {
+          const q = deferredSearch.toLowerCase()
           if (![s.unit_id, s.po, s.shipper, s.cliente, s.commodity].join(' ').toLowerCase().includes(q)) return false
         }
         for (const other of COLUMNS) {
@@ -1093,33 +1195,26 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       opts[col.key] = [...new Set(rows.map(s => col.getValue(s)).filter(Boolean))].sort()
     }
     return opts
-  }, [shipments, search, filterCliente, filterEstado, filterCommodity, filterLocation, colFilters])
+  }, [shipments, deferredSearch, filterCliente, filterEstado, filterCommodity, filterLocation, colFilters])
 
-  // clear cascaded-out col filters
   useEffect(() => {
     setColFilters(prev => {
-      const next = { ...prev }
-      let changed = false
+      const next = { ...prev }; let changed = false
       for (const col of COLUMNS) {
         const fv = next[col.key]
-        if (fv && !(colOptions[col.key] ?? []).includes(fv)) {
-          delete next[col.key]
-          changed = true
-        }
+        if (fv && !(colOptions[col.key] ?? []).includes(fv)) { delete next[col.key]; changed = true }
       }
       return changed ? next : prev
     })
   }, [colOptions])
 
-  // filtered rows
   const baseFiltered = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10)
-    const q = search.toLowerCase()
+    const q = deferredSearch.toLowerCase()
     return shipments.filter(s => {
-      if (filterCliente  && s.cliente !== filterCliente) return false
-      if (filterEstado   && s.estado_general !== filterEstado) return false
+      if (filterCliente   && s.cliente !== filterCliente) return false
+      if (filterEstado    && s.estado_general !== filterEstado) return false
       if (filterCommodity && s.commodity !== filterCommodity) return false
-      if (filterLocation && s.location !== filterLocation) return false
+      if (filterLocation  && s.location !== filterLocation) return false
       if (filterHoy) {
         if (s.estado_general !== 'abierto') return false
         const eff = effectiveDate(s)
@@ -1136,7 +1231,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       }
       return true
     })
-  }, [shipments, search, filterCliente, filterEstado, filterCommodity, filterLocation, filterHoy, colFilters])
+  }, [shipments, deferredSearch, filterCliente, filterEstado, filterCommodity, filterLocation, filterHoy, colFilters])
 
   const filtered = useMemo(() => {
     if (sort) {
@@ -1150,7 +1245,6 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
         return sort.dir === 'asc' ? cmp : -cmp
       })
     }
-    // default: sort by effective inspection date asc, ready first within same date
     return [...baseFiltered].sort((a, b) => {
       const da = effectiveDate(a), db = effectiveDate(b)
       if (da === db) return (b.ready_for_inspection ?? 0) - (a.ready_for_inspection ?? 0)
@@ -1173,222 +1267,286 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   // ─── render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex h-screen bg-slate-100 overflow-hidden font-sans">
+    <div className="relative flex min-h-screen bg-gray-50 dark:bg-slate-950 text-gray-900 dark:text-slate-100">
 
       {/* ── Sidebar ── */}
-      <nav className="w-14 bg-slate-900 flex flex-col items-center py-3 gap-1 shrink-0">
-        <div className="mb-3">
-          <SidebarIcon>
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-            </svg>
-          </SidebarIcon>
+      <nav className="hidden w-56 shrink-0 flex-col border-r border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-5 lg:flex">
+        {/* Logo */}
+        <div className="flex items-center gap-2.5 px-3 mb-6">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold shrink-0">
+            IM
+          </div>
+          <div>
+            <p className="text-[12px] font-semibold text-gray-900 dark:text-slate-100 leading-tight">Inspection Master</p>
+            <p className="text-[11px] text-gray-400 dark:text-slate-500">Elite QA</p>
+          </div>
         </div>
 
-        <SidebarIcon active>
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
-          </svg>
-        </SidebarIcon>
+        {/* Nav links */}
+        <div className="space-y-0.5 flex-1">
+          <NavItem active label="Inspecciones">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z" />
+            </svg>
+          </NavItem>
 
-        <SidebarIcon>
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
-          </svg>
-        </SidebarIcon>
-
-        <a href="/staff">
-          <SidebarIcon>
-            <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <NavItem href="/staff" label="Equipo">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
             </svg>
-          </SidebarIcon>
-        </a>
+          </NavItem>
 
-        <SidebarIcon>
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" />
-          </svg>
-        </SidebarIcon>
+          <NavItem label="Alertas">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 4.5h.008v.008H12v-.008z" />
+            </svg>
+          </NavItem>
 
-        <SidebarIcon>
-          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 01-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 00-3.213-9.193 2.056 2.056 0 00-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 00-10.026 0 1.106 1.106 0 00-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
-          </svg>
-        </SidebarIcon>
+          <NavItem label="Warehouse">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21h16.5M4.5 3h15M5.25 3v18m13.5-18v18M9 6.75h1.5m-1.5 3h1.5m-1.5 3h1.5m3-6H15m-1.5 3H15m-1.5 3H15M9 21v-3.375c0-.621.504-1.125 1.125-1.125h3.75c.621 0 1.125.504 1.125 1.125V21" />
+            </svg>
+          </NavItem>
+        </div>
 
-        <div className="flex-1" />
-
-        <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-[11px] font-bold mb-1">
-          MM
+        {/* User */}
+        <div className="flex items-center gap-2.5 px-3 pt-4 border-t border-gray-100 dark:border-slate-800">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-500 text-[11px] font-bold text-white shrink-0">
+            MM
+          </div>
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium text-gray-900 dark:text-slate-100 truncate">Matias</p>
+            <p className="text-[11px] text-gray-400 dark:text-slate-500 truncate">Operador</p>
+          </div>
         </div>
       </nav>
 
-      {/* ── Main area ── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      {/* ── Main content ── */}
+      <div className="flex flex-1 flex-col min-h-screen min-w-0">
 
-        {/* ── Top bar ── */}
-        <div className="h-10 bg-slate-900 border-b border-slate-800 flex items-center px-4 gap-4 shrink-0">
-          <div className="flex items-center gap-2 text-slate-400 text-[13px]">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
-            </svg>
-            <span className="text-slate-500">Buscar...</span>
-          </div>
-          <div className="flex-1" />
-          {/* stats pills */}
-          <div className="flex items-center gap-4 text-[12px]">
-            <span className="text-slate-400">{stats.total} envíos</span>
-            <span className="text-blue-400">{stats.abiertos} abiertos</span>
-            <span className="text-emerald-400">{stats.listos} listos</span>
-            {lastUpdateIso && (
-              <span className="text-slate-500">Actualizado {timeAgo(lastUpdateIso)}</span>
-            )}
-          </div>
-          <NotificationBell />
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing}
-            className="p-1 rounded text-slate-500 hover:text-white transition-colors disabled:opacity-40"
-          >
-            <svg className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
-
-        {/* ── Page header ── */}
-        <div className="px-6 pt-5 pb-2 flex items-start justify-between shrink-0">
-          <div>
-            <h1 className="text-[22px] font-bold text-slate-900 tracking-tight">Inspecciones</h1>
-            <p className="text-[13px] text-slate-500 mt-0.5">Gestión de envíos y calidad · Elite Quality Assurance</p>
-          </div>
-          <button
-            onClick={() => { setFilterHoy(h => !h); setEstado('abierto') }}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-semibold transition-colors ${
-              filterHoy
-                ? 'bg-amber-500 text-white shadow-sm'
-                : 'bg-slate-900 text-white hover:bg-slate-700'
-            }`}
-          >
-            <span className="text-base leading-none">{filterHoy ? '★' : '☆'}</span>
-            Hoy &amp; Mañana
-            <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold ${
-              filterHoy ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-300'
-            }`}>{stats.paraHoy}</span>
-          </button>
-        </div>
-
-        {/* ── Filter chips ── */}
-        <div className="px-6 pb-3 flex flex-wrap gap-2 items-center shrink-0">
-          <Chip label="Buscar container, PO..." value={search} onChange={setSearch} isSearch />
-          <Chip label="Cliente"     value={filterCliente}   onChange={setCliente}   options={clientes} />
-          <Chip label="Commodity"   value={filterCommodity} onChange={setCommodity} options={commodities} />
-          <Chip label="Location"    value={filterLocation}  onChange={setLocation}  options={locations} />
-          <Chip
-            label="Estado"
-            value={filterEstado === 'abierto' ? '' : filterEstado}
-            onChange={v => setEstado(v || 'abierto')}
-            options={['abierto', 'cerrado']}
-          />
-
-          {anyFilter && (
-            <button onClick={clearAll} className="text-[12px] text-slate-400 hover:text-slate-700 underline underline-offset-2">
-              Limpiar
-            </button>
-          )}
-
-          <div className="ml-auto flex items-center gap-3">
-            <span className="text-[12px] text-slate-400">{filtered.length} de {shipments.length}</span>
-            <ColPicker visible={visibleCols} onChange={toggleCol} onResetOrder={handleResetOrder} />
-          </div>
-        </div>
-
-        {/* ── Content: Briefing or Table ── */}
-        {filterHoy ? (
-          <BriefingPanel shipments={filtered} onSelect={setSelected} />
-        ) : (
-        <div className="flex-1 overflow-auto px-6 pb-6 min-h-0">
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-            <table className="w-full border-collapse text-left">
-              <thead>
-                <tr className="bg-slate-800">
-                  {visibleColumns.map(col => {
-                    const isActive = sort?.key === col.key
-                    return (
-                      <th
-                        key={col.key}
-                        draggable
-                        onDragStart={() => handleColDragStart(col.key)}
-                        onDragOver={e => e.preventDefault()}
-                        onDrop={() => handleColDrop(col.key)}
-                        onClick={() => handleSort(col.key)}
-                        className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer select-none transition-colors hover:bg-slate-700 ${
-                          isActive ? 'text-blue-300' : 'text-slate-300'
-                        } ${col.tdClass ?? ''}`}
-                      >
-                        <span className="inline-flex items-center gap-1">
-                          <span className="opacity-30 text-[10px] mr-0.5 cursor-grab">⠿</span>
-                          {col.label}
-                          <span className="opacity-50 text-[10px]">
-                            {isActive ? (sort!.dir === 'asc' ? '↑' : '↓') : '↕'}
-                          </span>
-                        </span>
-                      </th>
-                    )
-                  })}
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-100">
-                {filtered.map(s => {
-                  const today     = new Date().toISOString().slice(0, 10)
-                  const isCerrado = s.estado_general === 'cerrado'
-                  const isListo   = s.ready_for_inspection === 1 && !isCerrado
-                  const eff       = effectiveDate(s)
-                  const isOverdue = isListo && eff != null && eff < today
-                  const isHoy     = isListo && eff === today
-
-                  return (
-                    <tr
-                      key={s.id}
-                      onClick={() => setSelected(s)}
-                      className={[
-                        'cursor-pointer transition-colors',
-                        isCerrado  ? 'opacity-50 hover:opacity-70 hover:bg-slate-50' : '',
-                        isOverdue  ? 'bg-red-50 hover:bg-red-100' : '',
-                        isHoy      ? 'bg-amber-50 hover:bg-amber-100' : '',
-                        isListo && !isOverdue && !isHoy ? 'hover:bg-emerald-50' : '',
-                        !isListo && !isCerrado ? 'hover:bg-slate-50' : '',
-                      ].filter(Boolean).join(' ')}
-                    >
-                      {visibleColumns.map(col => (
-                        <td key={col.key} className={`px-3 py-2.5 whitespace-nowrap ${col.tdClass ?? ''}`}>
-                          {col.render(s)}
-                        </td>
-                      ))}
-                    </tr>
-                  )
-                })}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={visibleColumns.length} className="py-20 text-center text-[13px] text-slate-400">
-                      No se encontraron envíos con los filtros actuales.
-                    </td>
-                  </tr>
+        {/* Top bar */}
+        <header className="sticky top-0 z-20 border-b border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+          <div className="px-4 sm:px-6">
+            {/* Title row */}
+            <div className="flex items-center justify-between h-14 gap-4">
+              {/* Mobile logo */}
+              <div className="flex items-center gap-2 lg:hidden">
+                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-gray-900 dark:bg-slate-100 text-white dark:text-slate-900 text-[11px] font-bold">
+                  IM
+                </div>
+                <span className="text-sm font-semibold text-gray-900 dark:text-slate-100">Inspecciones</span>
+              </div>
+              <h1 className="hidden lg:block text-sm font-semibold text-gray-900 dark:text-slate-100">
+                Inspecciones
+                {lastUpdateIso && (
+                  <span className="ml-2 text-[11px] font-normal text-gray-400 dark:text-slate-500">
+                    · actualizado {timeAgo(lastUpdateIso)}
+                  </span>
                 )}
-              </tbody>
-            </table>
+              </h1>
+
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/staff"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[13px] text-gray-600 dark:text-slate-300 hover:text-gray-900 dark:hover:text-slate-100 lg:hidden"
+                >
+                  Equipo
+                </Link>
+                <NotificationBell />
+                <button
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                  aria-label="Actualizar"
+                  className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 disabled:opacity-40 transition-colors"
+                >
+                  <svg className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+                <ThemeToggle dark={dark} toggle={toggleTheme} />
+              </div>
+            </div>
+
+            {/* Stats row */}
+            <div className="grid grid-cols-4 gap-3 pb-3">
+              <StatCard label="Total"      value={stats.total}    hint="base completa"      tone="slate" />
+              <StatCard label="Abiertos"   value={stats.abiertos} hint="en curso"            tone="blue" />
+              <StatCard label="Listos"     value={stats.listos}   hint="para inspección"     tone="emerald" />
+              <StatCard label="48h"        value={stats.paraHoy}  hint="requieren atención"  tone="amber" />
+            </div>
           </div>
-        </div>
-        )}
+        </header>
+
+        {/* Main */}
+        <main className="flex-1 px-4 sm:px-6 py-4 space-y-3">
+
+          {/* Filter bar */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <Chip label="Buscar container, PO..." value={search} onChange={setSearch} isSearch />
+              <Chip label="Cliente"   value={filterCliente}   onChange={setCliente}   options={clientes} />
+              <Chip label="Commodity" value={filterCommodity} onChange={setCommodity} options={commodities} />
+              <Chip label="Location"  value={filterLocation}  onChange={setLocation}  options={locations} />
+              <Chip
+                label="Estado"
+                value={filterEstado === 'abierto' ? '' : filterEstado}
+                onChange={v => setEstado(v || 'abierto')}
+                options={['abierto', 'cerrado']}
+              />
+              {anyFilter && (
+                <button
+                  onClick={clearAll}
+                  className="text-[12px] text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-300 underline underline-offset-2"
+                >
+                  Limpiar
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => { setFilterHoy(h => !h); setEstado('abierto') }}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[13px] font-medium transition-colors ${
+                  filterHoy
+                    ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                    : 'border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:border-gray-300 dark:hover:border-slate-600'
+                }`}
+              >
+                {filterHoy ? '★' : '☆'} Agenda 48h
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gray-100 dark:bg-slate-700 px-1.5 text-[11px] font-bold text-gray-600 dark:text-slate-400">
+                  {stats.paraHoy}
+                </span>
+              </button>
+
+              <span className="text-[12px] text-gray-400 dark:text-slate-500 whitespace-nowrap">
+                {filtered.length} / {shipments.length}
+              </span>
+
+              <ColPicker visible={visibleCols} onChange={toggleCol} onResetOrder={handleResetOrder} />
+            </div>
+          </div>
+
+          {/* Content area */}
+          {filterHoy ? (
+            <div className="rounded-xl border border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+              <div className="px-5 py-3 border-b border-gray-100 dark:border-slate-800">
+                <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Agenda — hoy y mañana</h2>
+              </div>
+              <div className="p-5">
+                <BriefingPanel shipments={filtered} onSelect={setSelected} />
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+              {/* Table legend */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-slate-800">
+                <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Tabla operativa</h2>
+                <div className="flex items-center gap-3 text-[11px]">
+                  <span className="inline-flex items-center gap-1.5 text-red-600 dark:text-red-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-red-500" />Urgente
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />Hoy
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Listo
+                  </span>
+                </div>
+              </div>
+
+              <div className="overflow-auto">
+                <table className="min-w-full border-separate border-spacing-0 text-left">
+                  <thead>
+                    <tr>
+                      {visibleColumns.map(col => {
+                        const isActive = sort?.key === col.key
+                        return (
+                          <th
+                            key={col.key}
+                            draggable
+                            onDragStart={() => handleColDragStart(col.key)}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={() => handleColDrop(col.key)}
+                            onClick={() => handleSort(col.key)}
+                            className={`sticky top-0 z-10 cursor-pointer select-none whitespace-nowrap border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800/60 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-slate-400 transition-colors hover:bg-gray-100 dark:hover:bg-slate-700/50 ${
+                              isActive ? 'text-gray-900 dark:text-slate-100' : ''
+                            } ${col.tdClass ?? ''}`}
+                          >
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="cursor-grab text-[10px] opacity-20 hover:opacity-60">⠿</span>
+                              {col.label}
+                              <span className="text-[10px] opacity-40">
+                                {isActive ? (sort!.dir === 'asc' ? '↑' : '↓') : '↕'}
+                              </span>
+                            </span>
+                          </th>
+                        )
+                      })}
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {filtered.map(s => {
+                      const today = new Date().toISOString().slice(0, 10)
+                      const isCerrado = s.estado_general === 'cerrado'
+                      const isListo = s.ready_for_inspection === 1 && !isCerrado
+                      const eff = effectiveDate(s)
+                      const isOverdue = isListo && eff != null && eff < today
+                      const isHoy = isListo && eff === today
+
+                      return (
+                        <tr
+                          key={s.id}
+                          onClick={() => setSelected(s)}
+                          className={[
+                            'group cursor-pointer transition-colors',
+                            isCerrado ? 'opacity-50 hover:bg-gray-50 dark:hover:bg-slate-800/40' : '',
+                            isOverdue ? 'bg-red-50/50 dark:bg-red-950/20 hover:bg-red-100/50 dark:hover:bg-red-950/30' : '',
+                            isHoy ? 'bg-amber-50/50 dark:bg-amber-950/20 hover:bg-amber-100/50 dark:hover:bg-amber-950/30' : '',
+                            isListo && !isOverdue && !isHoy ? 'hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20' : '',
+                            !isListo && !isCerrado ? 'hover:bg-gray-50 dark:hover:bg-slate-800/40' : '',
+                          ].filter(Boolean).join(' ')}
+                        >
+                          {visibleColumns.map(col => (
+                            <td
+                              key={col.key}
+                              className={`border-b border-gray-100 dark:border-slate-800/60 px-3 py-3 whitespace-nowrap ${col.tdClass ?? ''}`}
+                            >
+                              {col.render(s)}
+                            </td>
+                          ))}
+                        </tr>
+                      )
+                    })}
+
+                    {filtered.length === 0 && (
+                      <tr>
+                        <td colSpan={visibleColumns.length} className="px-6 py-16 text-center">
+                          <div className="mx-auto flex max-w-sm flex-col items-center gap-2">
+                            <svg className="h-8 w-8 text-gray-200 dark:text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.75 15.75L18 18m-3.75-2.25A6.75 6.75 0 1118 9a6.75 6.75 0 01-3.75 6.75z" />
+                            </svg>
+                            <p className="text-sm text-gray-500 dark:text-slate-400">Sin resultados con los filtros actuales.</p>
+                            <button onClick={clearAll} className="text-[13px] text-blue-600 dark:text-blue-400 hover:underline">
+                              Limpiar filtros
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </main>
       </div>
 
-      {/* ── Detail panel ── */}
+      {/* Detail panel */}
       {selected && <DetailPanel s={selected} onClose={handlePanelClose} />}
 
-      {/* ── Toast notifications (Supabase Realtime) ── */}
+      {/* Toast notifications */}
       <ToastList toasts={toasts} onDismiss={dismiss} />
     </div>
   )

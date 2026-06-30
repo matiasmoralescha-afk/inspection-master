@@ -1,3 +1,78 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Design tokens ─────────────────────────────────────────────────────────── */
+
+:root {
+  --font-ui: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --font-mono: 'SFMono-Regular', 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
+html {
+  min-height: 100%;
+  font-family: var(--font-ui);
+  background-color: #f9fafb; /* gray-50 */
+}
+
+.dark html,
+html.dark {
+  background-color: #0f172a; /* slate-950 */
+}
+
+body {
+  min-height: 100vh;
+  background: transparent;
+  color: #111827; /* gray-900 */
+}
+
+.dark body {
+  color: #f1f5f9; /* slate-100 */
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.3);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.5);
+  background-clip: padding-box;
+}
+
+/* ── Toast animation ───────────────────────────────────────────────────────── */
+
+.animate-toast-in {
+  animation: toast-in 220ms ease-out both;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(12px, 0, 0) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}

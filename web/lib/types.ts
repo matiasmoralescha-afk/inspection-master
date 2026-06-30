@@ -1,3 +1,14 @@
+export type Client = {
+  id: number
+  display_name: string
+  slug: string
+  locations: string | null   // JSON array: '["Miami","Texas"]'
+  known_modes: string | null // JSON array: '["ocean","air"]'
+  cutoff_hour: number | null
+  active: number
+  created_at: string
+}
+
 export type DbNotification = {
   id: number
   shipment_id: number | null

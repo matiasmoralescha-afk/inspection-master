@@ -3,13 +3,31 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Inspection Master',
-  description: 'Dashboard de seguimiento de envíos',
+  description: 'Control operativo de inspecciones, estados y seguimiento de calidad',
 }
+
+// Inline script prevents dark-mode flash on page load
+const themeScript = `
+(function() {
+  try {
+    var saved = localStorage.getItem('eqa-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (saved === 'dark' || (!saved && prefersDark)) {
+      document.documentElement.classList.add('dark');
+    }
+  } catch(e) {}
+})();
+`
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es">
-      <body className="bg-gray-50 min-h-screen antialiased">{children}</body>
+    <html lang="es" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-screen antialiased bg-gray-50 dark:bg-slate-950">
+        {children}
+      </body>
     </html>
   )
 }
