@@ -10,7 +10,7 @@ alpine_fresh:
     - "ALPINE FRESH"
     - "ALPINE"
   cutoff_hour: 17
-  location: Miami
+  location: [Miami, Texas, Los Angeles]
   known_modes: [ocean, air]
 
 prime_time:
@@ -25,7 +25,7 @@ prime_time:
   subject_patterns:
     - "PRIME TIME"
   cutoff_hour: 16
-  location: Miami
+  location: [Miami, Texas]
   known_modes: [ocean, air, terrestre]
 
 altar_produce:
@@ -42,7 +42,7 @@ altar_produce:
   subject_patterns:
     - "ALTAR PRODUCE"
   cutoff_hour: 16
-  location: Texas
+  location: [Miami, Texas]
   known_modes: [ocean]
 
 growers_are_us:
@@ -88,7 +88,7 @@ fresh_way:
     - "VEGLAND"
     - "INSPECCION VEGLAND"
   cutoff_hour: null
-  location: Los Angeles  # LAX/Vegland; override per-shipment if Miami
+  location: [Miami, Texas, Los Angeles]
   known_modes: [ocean, air, terrestre]
 
 robinson_fresh:
@@ -117,7 +117,7 @@ square_one:
   subject_patterns:
     - "SQUARE ONE"
   cutoff_hour: null
-  location: Miami
+  location: [Miami, Texas]
   known_modes: [ocean, air, repack, rejection]
 
 agropeppers:
@@ -131,6 +131,7 @@ agropeppers:
     - "AGROPEPPERS"
     - "AGRO PEPPERS"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean]
 
 harvest:
@@ -143,6 +144,7 @@ harvest:
   subject_patterns:
     - "HARVEST"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean]
 
 baja_son:
@@ -155,6 +157,7 @@ baja_son:
   subject_patterns:
     - "BAJA SON"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean]
 
 nativa:
@@ -165,6 +168,7 @@ nativa:
   subject_patterns:
     - "NATIVA"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean, air]
 
 icon:
@@ -175,7 +179,22 @@ icon:
   subject_patterns:
     - "ICON"
   cutoff_hour: null
+  location: Miami
   known_modes: [ocean, air]
+
+sunkist:
+  display_name: "Sunkist"
+  aliases:
+    - "Sunkist"
+    - "SUNKIST"
+    - "Sunkist Growers"
+    - "SUNKIST GROWERS"
+  subject_patterns:
+    - "SUNKIST"
+    - "BAG JOB"
+  cutoff_hour: null
+  location: [Oxnard, Los Angeles, Miami, New Jersey]
+  known_modes: [ocean]
 
 sol_de_ica:
   display_name: "Sol de Ica"
