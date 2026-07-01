@@ -5,36 +5,68 @@
 /* ── Design tokens ─────────────────────────────────────────────────────────── */
 
 :root {
-  --font-ui: 'Avenir Next', 'Segoe UI', 'Helvetica Neue', sans-serif;
-  --font-mono: 'SFMono-Regular', 'Menlo', 'Monaco', 'Courier New', monospace;
+  --canvas: 249 250 251;
+  --surface: 255 255 255;
+  --surface-muted: 249 250 251;
+  --surface-sunk: 243 244 246;
+  --border: 229 231 235;
+  --border-strong: 209 213 219;
+  --text-primary: 17 24 39;
+  --text-secondary: 75 85 99;
+  --text-tertiary: 107 114 128;
+  --text-muted: 156 163 175;
+  --accent: 37 99 235;
+  --accent-hover: 29 78 216;
+  --accent-ink: 17 24 39;
+  --focus-ring: 59 130 246;
+  --ok-fg: 4 120 87;    --ok-bg: 236 253 245;  --ok-border: 167 243 208;  --ok-solid: 16 185 129;
+  --warn-fg: 180 83 9;  --warn-bg: 255 251 235; --warn-border: 253 230 138; --warn-solid: 245 158 11;
+  --info-fg: 3 105 161; --info-bg: 240 249 255; --info-border: 186 230 253; --info-solid: 14 165 233;
+  --danger-fg: 185 28 28; --danger-bg: 254 242 242; --danger-border: 254 202 202; --danger-solid: 239 68 68;
 }
 
-html {
-  min-height: 100%;
-  font-family: var(--font-ui);
-  background-color: #f9fafb; /* gray-50 */
+.dark {
+  --canvas: 2 6 23;
+  --surface: 15 23 42;
+  --surface-muted: 30 41 59;
+  --surface-sunk: 30 41 59;
+  --border: 51 65 85;
+  --border-strong: 71 85 105;
+  --text-primary: 241 245 249;
+  --text-secondary: 203 213 225;
+  --text-tertiary: 148 163 184;
+  --text-muted: 100 116 139;
+  --accent: 59 130 246;
+  --accent-hover: 96 165 250;
+  --accent-ink: 241 245 249;
+  --focus-ring: 59 130 246;
+  --ok-fg: 52 211 153;    --ok-bg: 6 78 59;     --ok-border: 6 95 70;
+  --warn-fg: 251 191 36;  --warn-bg: 120 53 15; --warn-border: 146 64 14;
+  --info-fg: 56 189 248;  --info-bg: 12 74 110; --info-border: 7 89 133;
+  --danger-fg: 248 113 113; --danger-bg: 127 29 29; --danger-border: 127 29 29;
 }
 
-.dark html,
-html.dark {
-  background-color: #0f172a; /* slate-950 */
-}
+@layer base {
+  html {
+    font-family: 'Avenir Next', 'Manrope', 'Segoe UI', 'Helvetica Neue', system-ui, sans-serif;
+    background-color: rgb(var(--canvas));
+    -webkit-font-smoothing: antialiased;
+  }
 
-body {
-  min-height: 100vh;
-  background: transparent;
-  color: #111827; /* gray-900 */
-}
+  body {
+    color: rgb(var(--text-primary));
+    font-size: 13px;
+    line-height: 1.5;
+    min-height: 100vh;
+    background: transparent;
+  }
 
-.dark body {
-  color: #f1f5f9; /* slate-100 */
-}
-
-button,
-input,
-select,
-textarea {
-  font: inherit;
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
 }
 
 /* ── Scrollbar ──────────────────────────────────────────────────────────────── */
@@ -62,10 +94,6 @@ textarea {
 
 /* ── Toast animation ───────────────────────────────────────────────────────── */
 
-.animate-toast-in {
-  animation: toast-in 220ms ease-out both;
-}
-
 @keyframes toast-in {
   from {
     opacity: 0;
@@ -73,6 +101,6 @@ textarea {
   }
   to {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
+    transform: none;
   }
 }
