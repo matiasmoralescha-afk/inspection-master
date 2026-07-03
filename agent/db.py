@@ -101,6 +101,10 @@ def upsert_shipment(conn: sqlite3.Connection, record: dict) -> str:
             if new_val is not None and new_val != '':
                 updates[field] = new_val
 
+        # Note: `lookup_key` is a STORED GENERATED column (see schema.sql) derived
+        # from cliente_norm|unit_id_norm|po_norm, so it recomputes automatically
+        # when `po_norm` is filled in here — no manual update needed (and a manual
+        # UPDATE would fail: "cannot UPDATE generated column").
         set_clause = ', '.join(f'{k}=?' for k in updates)
         params = list(updates.values()) + [existing['id']]
         conn.execute(f'UPDATE shipments SET {set_clause} WHERE id=?', params)

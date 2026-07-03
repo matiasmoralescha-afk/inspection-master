@@ -3,6 +3,11 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Modal } from '@/components/ui/modal'
+import { Select } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import type { Shipment, DbNotification, Staff } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 
@@ -37,7 +42,7 @@ function ThemeToggle({ dark, toggle }: { dark: boolean; toggle: () => void }) {
       onClick={toggle}
       aria-label={dark ? 'Modo claro' : 'Modo oscuro'}
       title={dark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
-      className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 transition-colors"
+      className="rounded-lg border border-hairline bg-surface p-1.5 text-ink-tertiary hover:text-gray-900 dark:hover:text-slate-100 transition-colors"
     >
       {dark ? (
         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -79,11 +84,11 @@ function ToastList({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: num
       {toasts.map(t => (
         <div
           key={t.id}
-          className={`animate-toast-in pointer-events-auto flex items-start gap-3 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-3 shadow-lg border-l-4 ${EVENT_COLORS[t.event_type]}`}
+          className={`animate-toast-in pointer-events-auto flex items-start gap-3 rounded-xl border border-hairline bg-surface px-4 py-3 shadow-lg border-l-4 ${EVENT_COLORS[t.event_type]}`}
         >
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-semibold text-gray-800 dark:text-slate-100">{EVENT_LABELS[t.event_type]}</p>
-            <p className="text-[12px] text-gray-500 dark:text-slate-400 mt-0.5 truncate">{t.message}</p>
+            <p className="text-[12px] text-ink-tertiary mt-0.5 truncate">{t.message}</p>
           </div>
           <button
             onClick={() => onDismiss(t.id)}
@@ -179,12 +184,125 @@ function fmtDate(iso: string | null | undefined): string {
 }
 
 function gradeColor(grade: string | null | undefined): string {
-  if (!grade) return 'text-gray-400 dark:text-slate-500'
+  if (!grade) return 'text-ink-muted'
   if (grade.startsWith('A')) return 'text-emerald-600 dark:text-emerald-400 font-semibold'
   if (grade.startsWith('B')) return 'text-amber-500 dark:text-amber-400 font-semibold'
   if (grade.startsWith('C')) return 'text-orange-500 dark:text-orange-400 font-semibold'
   if (grade.startsWith('D')) return 'text-red-600 dark:text-red-400 font-semibold'
   return 'text-gray-600 dark:text-slate-400'
+}
+
+const SHIPMENT_SELECT = '*, inspector:staff(id,name,role,zone)'
+
+const ESTADO_OPTIONS = [
+  { value: 'abierto', label: 'Abierto' },
+  { value: 'cerrado', label: 'Cerrado' },
+] as const
+
+const INSPECTION_STATUS_OPTIONS = [
+  { value: 'pendiente', label: 'Pendiente' },
+  { value: 'programada', label: 'Programada' },
+  { value: 'completada', label: 'Completada' },
+] as const
+
+const TIPO_CARGA_OPTIONS = [
+  { value: 'ocean', label: 'Ocean' },
+  { value: 'air', label: 'Air' },
+  { value: 'truck', label: 'Truck' },
+] as const
+
+function toNullable(value: string | null | undefined): string | null {
+  const normalized = value?.trim()
+  return normalized ? normalized : null
+}
+
+function toNullableNumber(value: string | null | undefined): number | null {
+  const normalized = value?.trim()
+  if (!normalized) return null
+  const num = Number(normalized)
+  return Number.isFinite(num) ? num : null
+}
+
+function normalizeClientName(raw: string): string {
+  return raw.trim().toUpperCase()
+}
+
+// Keep in sync with agent/normalizers.py:normalize_unit_id — same placeholder
+// set, since the agent is the authority for what lookup_key a shipment gets.
+const INVALID_UNIT_IDS = new Set(['DELIVERY', 'N/A', 'NA', 'TBD', 'TBC', 'REJECT'])
+
+function normalizeUnitId(value: string | null | undefined): string | null {
+  const normalized = value?.trim()
+  if (!normalized) return null
+  const cleaned = normalized.replace(/[\s.-]+/g, '').toUpperCase()
+  if (!cleaned || INVALID_UNIT_IDS.has(cleaned)) return null
+  return cleaned
+}
+
+// Keep in sync with agent/normalizers.py:normalize_po's _PO_PLACEHOLDERS.
+const PO_PLACEHOLDERS = new Set(['PO', 'N/A', 'NA', 'TBD', 'TBC'])
+
+function normalizePo(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toUpperCase()
+  if (!normalized) return null
+  return PO_PLACEHOLDERS.has(normalized) ? null : normalized
+}
+
+function buildLookupKey(shipment: Pick<Shipment, 'cliente' | 'cliente_norm' | 'unit_id' | 'unit_id_norm' | 'po' | 'po_norm' | 'lookup_key'>): string {
+  if (shipment.lookup_key) return shipment.lookup_key
+  const clienteNorm = shipment.cliente_norm || normalizeClientName(shipment.cliente)
+  const unitNorm = shipment.unit_id_norm ?? normalizeUnitId(shipment.unit_id)
+  const poNorm = shipment.po_norm ?? normalizePo(shipment.po)
+  return `${clienteNorm}|${unitNorm ?? ''}|${poNorm ?? ''}`
+}
+
+function withDerivedShipmentFields(base: Shipment, patch: Partial<Shipment>): Partial<Shipment> {
+  const next = { ...base, ...patch }
+  const derived: Partial<Shipment> = {
+    ultima_actualizacion: new Date().toISOString(),
+  }
+
+  if ('cliente' in patch) derived.cliente_norm = normalizeClientName(next.cliente)
+  if ('unit_id' in patch) derived.unit_id_norm = normalizeUnitId(next.unit_id)
+  if ('po' in patch) derived.po_norm = normalizePo(next.po)
+
+  return { ...patch, ...derived }
+}
+
+type NewShipmentForm = {
+  cliente: string
+  tipo_carga: string
+  location: string
+  unit_id: string
+  po: string
+  commodity: string
+  shipper: string
+  country_of_origin: string
+  eta_fecha: string
+  dia_disponible_para_inspeccion: string
+  inspection_status: string
+  estado_general: string
+  ready_for_inspection: boolean
+  pallets: string
+  comments_raw: string
+}
+
+const EMPTY_NEW_SHIPMENT: NewShipmentForm = {
+  cliente: '',
+  tipo_carga: 'ocean',
+  location: '',
+  unit_id: '',
+  po: '',
+  commodity: '',
+  shipper: '',
+  country_of_origin: '',
+  eta_fecha: '',
+  dia_disponible_para_inspeccion: '',
+  inspection_status: 'pendiente',
+  estado_general: 'abierto',
+  ready_for_inspection: false,
+  pallets: '',
+  comments_raw: '',
 }
 
 // ─── column definitions ──────────────────────────────────────────────────────
@@ -202,50 +320,50 @@ const COLUMNS: Col[] = [
   {
     key: 'po', label: 'PO', defaultVisible: true,
     getValue: s => s.po ?? '',
-    render: s => <span className="font-mono text-[13px] font-medium text-gray-900 dark:text-slate-100">{s.po ?? '—'}</span>,
+    render: s => <span className="font-mono text-[13px] font-medium text-ink-primary">{s.po ?? '—'}</span>,
   },
   {
     key: 'unit_id', label: 'Container', defaultVisible: true,
     getValue: s => s.unit_id ?? '',
-    render: s => <span className="font-mono text-[13px] text-gray-700 dark:text-slate-300">{s.unit_id ?? '—'}</span>,
+    render: s => <span className="font-mono text-[13px] text-ink-secondary">{s.unit_id ?? '—'}</span>,
   },
   {
     key: 'commodity', label: 'Commodity', defaultVisible: true,
     getValue: s => s.commodity ?? '',
-    render: s => <span className="text-[13px] text-gray-700 dark:text-slate-300">{s.commodity ?? '—'}</span>,
+    render: s => <span className="text-[13px] text-ink-secondary">{s.commodity ?? '—'}</span>,
   },
   {
     key: 'location', label: 'Location', defaultVisible: true,
     getValue: s => s.location ?? '',
     render: s => s.location
-      ? <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300">{s.location}</span>
+      ? <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-surface-sunk text-ink-secondary">{s.location}</span>
       : <span className="text-gray-300 dark:text-slate-600">—</span>,
   },
   {
     key: 'shipper', label: 'Warehouse', defaultVisible: true,
     getValue: s => s.shipper ?? '',
-    render: s => <span className="text-[13px] text-gray-500 dark:text-slate-400 max-w-[160px] truncate block">{s.shipper ?? '—'}</span>,
+    render: s => <span className="text-[13px] text-ink-tertiary max-w-[160px] truncate block">{s.shipper ?? '—'}</span>,
     tdClass: 'max-w-[160px]',
   },
   {
     key: 'country_of_origin', label: 'Origin', defaultVisible: true,
     getValue: s => s.country_of_origin ?? '',
-    render: s => <span className="text-[13px] text-gray-500 dark:text-slate-400">{s.country_of_origin ?? '—'}</span>,
+    render: s => <span className="text-[13px] text-ink-tertiary">{s.country_of_origin ?? '—'}</span>,
   },
   {
     key: 'cliente', label: 'Client', defaultVisible: true,
     getValue: s => s.cliente ?? '',
-    render: s => <span className="text-[13px] font-medium text-gray-800 dark:text-slate-200">{s.cliente}</span>,
+    render: s => <span className="text-[13px] font-medium text-ink-secondary">{s.cliente}</span>,
   },
   {
     key: 'vessel', label: 'Carrier', defaultVisible: false,
     getValue: s => s.vessel ?? '',
-    render: s => <span className="text-[13px] text-gray-400 dark:text-slate-500 uppercase tracking-wide">{s.vessel ? 'OCEAN' : '—'}</span>,
+    render: s => <span className="text-[13px] text-ink-muted uppercase tracking-wide">{s.vessel ? 'OCEAN' : '—'}</span>,
   },
   {
     key: 'bl', label: 'BL#', defaultVisible: false,
     getValue: s => s.bl ?? '',
-    render: s => <span className="font-mono text-[12px] text-gray-400 dark:text-slate-500">{s.bl ?? '—'}</span>,
+    render: s => <span className="font-mono text-[12px] text-ink-muted">{s.bl ?? '—'}</span>,
   },
   {
     key: 'dia_disponible', label: 'Inspection Date', defaultVisible: true,
@@ -296,7 +414,7 @@ function InspDateCell({ s }: { s: Shipment }) {
   const label = fmtDate(eff)
   if (eff < today)  return <span className="text-[13px] text-red-500 dark:text-red-400 font-medium">{label}</span>
   if (eff === today) return <span className="text-[13px] text-amber-600 dark:text-amber-400 font-semibold">{label} ●</span>
-  return <span className="text-[13px] text-gray-700 dark:text-slate-300">{label}</span>
+  return <span className="text-[13px] text-ink-secondary">{label}</span>
 }
 
 function ReinspCell({ date, estado }: { date: string | null; estado: string }) {
@@ -307,13 +425,13 @@ function ReinspCell({ date, estado }: { date: string | null; estado: string }) {
   if (date < today)  return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400">⚠ {label}</span>
   if (date === today) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400">HOY</span>
   if (date === tomorrow) return <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Mañana</span>
-  return <span className="text-[13px] text-gray-500 dark:text-slate-400">{label}</span>
+  return <span className="text-[13px] text-ink-tertiary">{label}</span>
 }
 
 function StatusBadge({ s }: { s: Shipment }) {
   if (s.estado_general === 'cerrado') {
     return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 dark:border-slate-700 bg-gray-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500 dark:text-slate-400">
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-hairline bg-surface-sunk px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-tertiary">
         <span className="h-1.5 w-1.5 rounded-full bg-gray-400 dark:bg-slate-500" />
         Done
       </span>
@@ -370,7 +488,7 @@ function Chip({
   if (isSearch) {
     return (
       <div className="relative flex items-center">
-        <svg className="pointer-events-none absolute left-3 h-4 w-4 text-gray-400 dark:text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className="pointer-events-none absolute left-3 h-4 w-4 text-ink-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0" />
         </svg>
         <input
@@ -379,7 +497,7 @@ function Chip({
           aria-label={label}
           value={value}
           onChange={e => onChange(e.target.value)}
-          className="w-full min-w-[200px] rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 py-2 pl-9 pr-4 text-[13px] text-gray-700 dark:text-slate-200 placeholder:text-gray-400 dark:placeholder:text-slate-500 outline-none transition focus:border-gray-400 dark:focus:border-slate-500 focus:ring-2 focus:ring-gray-100 dark:focus:ring-slate-700 sm:w-52"
+          className="w-full min-w-[200px] rounded-lg border border-hairline bg-surface py-2 pl-9 pr-4 text-[13px] text-gray-700 dark:text-slate-200 placeholder:text-gray-400 dark:placeholder:text-slate-500 outline-none transition focus:border-gray-400 dark:focus:border-slate-500 focus:ring-2 focus:ring-gray-100 dark:focus:ring-slate-700 sm:w-52"
         />
       </div>
     )
@@ -393,7 +511,7 @@ function Chip({
         className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[13px] font-medium transition-colors ${
           isActive
             ? 'border-gray-900 dark:border-slate-200 bg-gray-900 dark:bg-slate-100 text-white dark:text-slate-900'
-            : 'border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:border-gray-300 dark:hover:border-slate-600 hover:text-gray-900 dark:hover:text-slate-100'
+            : 'border-hairline bg-surface text-ink-secondary hover:border-gray-300 dark:hover:border-slate-600 hover:text-gray-900 dark:hover:text-slate-100'
         }`}
       >
         {isActive ? `${label}: ${value}` : label}
@@ -403,10 +521,10 @@ function Chip({
       </button>
 
       {open && options && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 min-w-[160px] rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 shadow-lg">
+        <div className="absolute left-0 top-full z-50 mt-1.5 min-w-[160px] rounded-xl border border-hairline bg-surface p-1.5 shadow-lg">
           <button
             onClick={() => { onChange(''); setOpen(false) }}
-            className="w-full rounded-lg px-3 py-2 text-left text-[13px] text-gray-400 dark:text-slate-500 hover:bg-gray-50 dark:hover:bg-slate-700"
+            className="w-full rounded-lg px-3 py-2 text-left text-[13px] text-ink-muted hover:bg-surface-muted"
           >
             Todos
           </button>
@@ -414,8 +532,8 @@ function Chip({
             <button
               key={o}
               onClick={() => { onChange(o); setOpen(false) }}
-              className={`w-full rounded-lg px-3 py-2 text-left text-[13px] hover:bg-gray-50 dark:hover:bg-slate-700 ${
-                value === o ? 'text-gray-900 dark:text-slate-100 font-medium' : 'text-gray-600 dark:text-slate-300'
+              className={`w-full rounded-lg px-3 py-2 text-left text-[13px] hover:bg-surface-muted ${
+                value === o ? 'text-ink-primary font-medium' : 'text-ink-secondary'
               }`}
             >
               {o}
@@ -446,7 +564,7 @@ function ColPicker({ visible, onChange, onResetOrder }: { visible: Set<string>; 
       <button
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-[13px] font-medium text-gray-600 dark:text-slate-300 hover:border-gray-300 dark:hover:border-slate-600"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-3 py-2 text-[13px] font-medium text-ink-secondary hover:border-gray-300 dark:hover:border-slate-600"
       >
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
@@ -454,11 +572,11 @@ function ColPicker({ visible, onChange, onResetOrder }: { visible: Set<string>; 
         Columnas
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-52 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-2 shadow-lg">
-          <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-400 dark:text-slate-500">Columnas</p>
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-52 rounded-xl border border-hairline bg-surface p-2 shadow-lg">
+          <p className="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-ink-muted">Columnas</p>
           <div className="space-y-0.5 max-h-72 overflow-y-auto">
             {COLUMNS.map(col => (
-              <label key={col.key} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-[13px] text-gray-700 dark:text-slate-300 hover:bg-gray-50 dark:hover:bg-slate-700">
+              <label key={col.key} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-[13px] text-ink-secondary hover:bg-surface-muted">
                 <input
                   type="checkbox"
                   checked={visible.has(col.key)}
@@ -469,14 +587,14 @@ function ColPicker({ visible, onChange, onResetOrder }: { visible: Set<string>; 
               </label>
             ))}
           </div>
-          <div className="mt-2 flex gap-2 border-t border-gray-100 dark:border-slate-700 pt-2">
+          <div className="mt-2 flex gap-2 border-t border-hairline pt-2">
             <button onClick={() => COLUMNS.forEach(c => onChange(c.key, true))} className="text-[12px] text-blue-600 dark:text-blue-400 hover:underline">Todas</button>
             <span className="text-gray-300 dark:text-slate-600">·</span>
-            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))} className="text-[12px] text-gray-400 dark:text-slate-500 hover:underline">Reset cols</button>
+            <button onClick={() => COLUMNS.forEach(c => onChange(c.key, c.defaultVisible))} className="text-[12px] text-ink-muted hover:underline">Reset cols</button>
             {onResetOrder && (
               <>
                 <span className="text-gray-300 dark:text-slate-600">·</span>
-                <button onClick={onResetOrder} className="text-[12px] text-gray-400 dark:text-slate-500 hover:underline">Reset orden</button>
+                <button onClick={onResetOrder} className="text-[12px] text-ink-muted hover:underline">Reset orden</button>
               </>
             )}
           </div>
@@ -498,12 +616,12 @@ function NavItem({
 }) {
   const cls = `flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
     active
-      ? 'bg-gray-100 dark:bg-slate-800 text-gray-900 dark:text-slate-100 font-medium'
-      : 'text-gray-500 dark:text-slate-400 hover:bg-gray-50 dark:hover:bg-slate-800/60 hover:text-gray-900 dark:hover:text-slate-100'
+      ? 'bg-surface-sunk text-ink-primary font-medium'
+      : 'text-ink-tertiary hover:bg-gray-50 dark:hover:bg-slate-800/60 hover:text-gray-900 dark:hover:text-slate-100'
   }`
   const content = (
     <div className={cls}>
-      <span className={`shrink-0 ${active ? 'text-gray-700 dark:text-slate-300' : 'text-gray-400 dark:text-slate-500'}`}>
+      <span className={`shrink-0 ${active ? 'text-ink-secondary' : 'text-ink-muted'}`}>
         {children}
       </span>
       <span>{label}</span>
@@ -528,173 +646,452 @@ function StatCard({ hint, label, tone, value }: { hint: string; label: string; t
     amber:   'text-amber-600 dark:text-amber-400',
     blue:    'text-sky-600 dark:text-sky-400',
     emerald: 'text-emerald-600 dark:text-emerald-400',
-    slate:   'text-gray-700 dark:text-slate-300',
+    slate:   'text-ink-secondary',
   }
   return (
-    <div className="rounded-xl border border-gray-200 dark:border-slate-700/60 bg-white dark:bg-slate-800/50 px-4 py-3">
+    <div className="rounded-xl border border-hairline/60 bg-surface px-4 py-3">
       <div className="flex items-center justify-between mb-1.5">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400 dark:text-slate-500">{label}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-muted">{label}</p>
         <span className={`h-2 w-2 rounded-full ${dotMap[tone]}`} />
       </div>
       <p className={`text-2xl font-semibold tabular-nums ${numMap[tone]}`}>{value}</p>
-      <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5">{hint}</p>
+      <p className="text-[11px] text-ink-muted mt-0.5">{hint}</p>
     </div>
   )
 }
 
 // ─── detail panel ─────────────────────────────────────────────────────────────
 
+function CreateShipmentModal({
+  open,
+  onClose,
+  onCreate,
+}: {
+  open: boolean
+  onClose: () => void
+  onCreate: (form: NewShipmentForm) => Promise<void>
+}) {
+  const [form, setForm] = useState<NewShipmentForm>(EMPTY_NEW_SHIPMENT)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setForm(EMPTY_NEW_SHIPMENT)
+    setError(null)
+    setSaving(false)
+  }, [open])
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+
+    if (!form.cliente.trim()) {
+      setError('El cliente es obligatorio para crear la inspección.')
+      return
+    }
+
+    setSaving(true)
+    setError(null)
+
+    try {
+      await onCreate(form)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo crear la inspección.')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      title="Nueva inspección"
+      onClose={saving ? undefined : onClose}
+      width={860}
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>
+            Cancelar
+          </Button>
+          <Button type="submit" form="shipment-create-form" icon="plus" disabled={saving}>
+            {saving ? 'Creando…' : 'Crear inspección'}
+          </Button>
+        </>
+      )}
+    >
+      <form id="shipment-create-form" onSubmit={handleSubmit} className="space-y-5">
+        <div className="rounded-xl border border-hairline bg-surface-sunk px-4 py-3 text-sm text-ink-tertiary">
+          La app genera automáticamente `cliente_norm`, `unit_id_norm`, `po_norm` y `lookup_key` para que el registro quede consistente.
+        </div>
+
+        {error && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+            {error}
+          </div>
+        )}
+
+        <section className="space-y-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink-muted">Base</p>
+            <h3 className="mt-1 text-base font-semibold text-ink-primary">Datos principales</h3>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input
+              label="Cliente"
+              required
+              value={form.cliente}
+              onChange={event => setForm(prev => ({ ...prev, cliente: event.target.value }))}
+            />
+            <Select
+              label="Tipo de carga"
+              value={form.tipo_carga}
+              options={TIPO_CARGA_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
+              onChange={event => setForm(prev => ({ ...prev, tipo_carga: event.target.value }))}
+            />
+            <Input
+              label="Container"
+              value={form.unit_id}
+              onChange={event => setForm(prev => ({ ...prev, unit_id: event.target.value }))}
+            />
+            <Input
+              label="PO"
+              value={form.po}
+              onChange={event => setForm(prev => ({ ...prev, po: event.target.value }))}
+            />
+            <Input
+              label="Commodity"
+              value={form.commodity}
+              onChange={event => setForm(prev => ({ ...prev, commodity: event.target.value }))}
+            />
+            <Input
+              label="Location"
+              value={form.location}
+              onChange={event => setForm(prev => ({ ...prev, location: event.target.value }))}
+            />
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-ink-muted">Operación</p>
+            <h3 className="mt-1 text-base font-semibold text-ink-primary">Logística inicial</h3>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input
+              label="Warehouse / Shipper"
+              value={form.shipper}
+              onChange={event => setForm(prev => ({ ...prev, shipper: event.target.value }))}
+            />
+            <Input
+              label="País de origen"
+              value={form.country_of_origin}
+              onChange={event => setForm(prev => ({ ...prev, country_of_origin: event.target.value }))}
+            />
+            <Input
+              label="ETA"
+              type="date"
+              value={form.eta_fecha}
+              onChange={event => setForm(prev => ({ ...prev, eta_fecha: event.target.value }))}
+            />
+            <Input
+              label="Día disponible"
+              type="date"
+              value={form.dia_disponible_para_inspeccion}
+              onChange={event => setForm(prev => ({ ...prev, dia_disponible_para_inspeccion: event.target.value }))}
+            />
+            <Input
+              label="Pallets"
+              type="number"
+              min="0"
+              value={form.pallets}
+              onChange={event => setForm(prev => ({ ...prev, pallets: event.target.value }))}
+            />
+            <Select
+              label="Estatus de inspección"
+              value={form.inspection_status}
+              options={INSPECTION_STATUS_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
+              onChange={event => setForm(prev => ({ ...prev, inspection_status: event.target.value }))}
+            />
+          </div>
+        </section>
+
+        <section className="grid gap-4 rounded-xl border border-hairline bg-surface-sunk px-4 py-4 sm:grid-cols-2">
+          <Switch
+            checked={form.ready_for_inspection}
+            onChange={next => setForm(prev => ({ ...prev, ready_for_inspection: next }))}
+            label={form.ready_for_inspection ? 'Marcada como lista para inspección' : 'Aún no está lista para inspección'}
+          />
+          <Select
+            label="Estado general"
+            value={form.estado_general}
+            options={ESTADO_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
+            onChange={event => setForm(prev => ({ ...prev, estado_general: event.target.value }))}
+          />
+        </section>
+
+        <div className="flex flex-col gap-1">
+          <label htmlFor="shipment-create-comments" className="text-xs font-medium text-ink-tertiary">Comentarios</label>
+          <textarea
+            id="shipment-create-comments"
+            rows={4}
+            value={form.comments_raw}
+            onChange={event => setForm(prev => ({ ...prev, comments_raw: event.target.value }))}
+            className="w-full rounded-lg border border-hairline bg-surface px-3 py-2 text-base text-ink-primary outline-none transition-colors placeholder:text-ink-muted focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            placeholder="Notas iniciales, instrucciones o contexto del embarque"
+          />
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
 function DetailPanel({ s, onClose }: { s: Shipment; onClose: (dirty: boolean) => void }) {
-  const [local,  setLocal]  = useState<Shipment>(s)
-  const [dirty,  setDirty]  = useState(false)
+  const [local, setLocal] = useState<Shipment>(s)
+  const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => { if (!dirty) setLocal(s) }, [s, dirty])
 
   const today = new Date().toISOString().slice(0, 10)
-  const eff   = effectiveDate(local)
+  const eff = effectiveDate(local)
 
-  async function save(field: keyof Shipment, value: unknown) {
-    setSaving(field as string)
-    const patch = { [field]: value } as Partial<Shipment>
-    setLocal(prev => ({ ...prev, ...patch }))
+  async function savePatch(rawPatch: Partial<Shipment>, label: string): Promise<boolean> {
+    const previous = local
+    const patch = withDerivedShipmentFields(previous, rawPatch)
+    const optimistic = { ...previous, ...patch } as Shipment
+
+    setSaving(label)
+    setSaveError(null)
+    setLocal(optimistic)
+
+    // Only re-fetch the joined inspector row when the edit could actually
+    // change it — every other single-field edit doesn't need that round-trip.
+    const needsInspectorJoin = 'inspector_id' in patch
+    const query = supabase.from('shipments').update(patch).eq('id', previous.id)
+    const { data, error } = needsInspectorJoin
+      ? await query.select(SHIPMENT_SELECT).single()
+      : await query.select('*').single()
+
+    if (error) {
+      setLocal(previous)
+      setSaveError(error.message)
+      setSaving(null)
+      return false
+    }
+
+    setLocal(needsInspectorJoin ? (data as Shipment) : ({ ...data, inspector: previous.inspector } as Shipment))
     setDirty(true)
-    await supabase.from('shipments').update(patch).eq('id', local.id)
     setSaving(null)
+    return true
+  }
+
+  function save(field: keyof Shipment, value: unknown) {
+    return savePatch({ [field]: value } as Partial<Shipment>, field)
   }
 
   function sv(field: keyof Shipment) {
-    return (v: string | null) => save(field, v)
+    return (value: string | null) => save(field, value)
   }
 
+  async function handleDelete() {
+    setDeleting(true)
+    const { error } = await supabase.from('shipments').delete().eq('id', local.id)
+
+    if (error) {
+      setSaveError(error.message)
+      setDeleting(false)
+      return
+    }
+
+    setDeleting(false)
+    setDeleteOpen(false)
+    onClose(true)
+  }
+
+  const lookupKey = buildLookupKey(local)
+
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/30 dark:bg-black/50 backdrop-blur-sm" onClick={() => onClose(dirty)}>
-      <div
-        className="flex w-full max-w-[34rem] flex-col overflow-y-auto bg-white dark:bg-slate-900 shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* header */}
-        <div className="border-b border-gray-200 dark:border-slate-700 px-5 py-4 flex items-start justify-between bg-gray-50 dark:bg-slate-800/50">
-          <div>
-            <p className="text-[11px] text-gray-400 dark:text-slate-500 uppercase tracking-wider font-medium">{local.cliente}</p>
-            <h2 className="text-base font-bold text-gray-900 dark:text-slate-100 mt-0.5 font-mono">{local.unit_id ?? local.po ?? '—'}</h2>
-            {local.po && local.unit_id && <p className="text-[12px] text-gray-400 dark:text-slate-500 mt-0.5 font-mono">PO: {local.po}</p>}
+    <>
+      <div className="fixed inset-0 z-50 flex justify-end bg-black/30 backdrop-blur-sm dark:bg-black/50" onClick={() => onClose(dirty)}>
+        <div
+          className="flex h-full w-full max-w-[44rem] flex-col overflow-y-auto bg-surface shadow-2xl"
+          onClick={event => event.stopPropagation()}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3 border-b border-hairline bg-gray-50 px-5 py-4 dark:bg-slate-800/50">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-ink-muted">{local.cliente}</p>
+              <h2 className="mt-0.5 truncate font-mono text-base font-bold text-ink-primary">{local.unit_id ?? local.po ?? '—'}</h2>
+              <p className="mt-1 text-[12px] text-ink-muted">
+                {local.po ? `PO ${local.po}` : 'Sin PO'} · actualizada {timeAgo(local.ultima_actualizacion)}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {saving && <span className="text-[11px] text-ink-muted animate-pulse">Guardando…</span>}
+              {dirty && !saving && <span className="text-[11px] text-emerald-500">✓ Guardado</span>}
+              <Button size="sm" variant="danger" icon="trash" onClick={() => setDeleteOpen(true)}>
+                Eliminar
+              </Button>
+              <button
+                aria-label="Cerrar panel"
+                onClick={() => onClose(dirty)}
+                className="text-lg leading-none text-ink-muted hover:text-gray-700 dark:hover:text-slate-200"
+              >
+                ✕
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            {saving && <span className="text-[11px] text-gray-400 dark:text-slate-500 animate-pulse">Guardando…</span>}
-            {dirty && !saving && <span className="text-[11px] text-emerald-500">✓ Guardado</span>}
-            <button aria-label="Cerrar panel" onClick={() => onClose(dirty)} className="text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-200 text-lg leading-none">✕</button>
+
+          <div className="flex flex-wrap items-center gap-3 border-b border-hairline px-5 py-3">
+            <StatusBadge s={local} />
+            {eff && (
+              <span className={`text-[13px] ${eff < today ? 'font-medium text-red-500 dark:text-red-400' : eff === today ? 'font-semibold text-amber-600 dark:text-amber-400' : 'text-ink-tertiary'}`}>
+                {eff === today ? 'Hoy · ' : ''}{fmtDate(eff)}
+              </span>
+            )}
+            {local.location && (
+              <span className="ml-auto rounded bg-surface-sunk px-2 py-0.5 text-[11px] font-medium text-ink-secondary">{local.location}</span>
+            )}
           </div>
-        </div>
 
-        {/* status strip */}
-        <div className="px-5 py-3 border-b border-gray-200 dark:border-slate-700 flex items-center gap-3">
-          <StatusBadge s={local} />
-          {eff && (
-            <span className={`text-[13px] ${eff < today ? 'text-red-500 dark:text-red-400 font-medium' : eff === today ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-gray-500 dark:text-slate-400'}`}>
-              {eff === today ? 'Hoy — ' : ''}{fmtDate(eff)}
-            </span>
-          )}
-          {local.location && (
-            <span className="ml-auto text-[11px] font-medium bg-gray-100 dark:bg-slate-700 text-gray-600 dark:text-slate-300 px-2 py-0.5 rounded">{local.location}</span>
-          )}
-        </div>
+          <div className="flex-1 space-y-5 px-5 py-4">
+            {saveError && (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-300">
+                {saveError}
+              </div>
+            )}
 
-        {/* body */}
-        <div className="flex-1 px-5 py-4 space-y-5">
-          <section>
-            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Estado</p>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <EField label="Estado general" value={local.estado_general} onSave={sv('estado_general')}
-                options={[{value:'abierto',label:'Abierto'},{value:'cerrado',label:'Cerrado'}]} />
-              <EField label="Inspección" value={local.inspection_status} onSave={sv('inspection_status')}
-                options={[{value:'pendiente',label:'Pendiente'},{value:'programada',label:'Programada'},{value:'completada',label:'Completada'}]} />
-            </dl>
-          </section>
+            <div className="rounded-xl border border-hairline bg-surface-sunk px-4 py-3 text-sm text-ink-tertiary">
+              Toca `PO`, `Container` o cualquier campo para editarlo. Los campos normalizados se recalculan automáticamente.
+            </div>
 
-          <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
-            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Envío</p>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <EField label="Commodity"   value={local.commodity}       onSave={sv('commodity')} />
-              <EField label="País origen" value={local.country_of_origin} onSave={sv('country_of_origin')} />
-              <EField label="Shipper"     value={local.shipper}          onSave={sv('shipper')} />
-              <EField label="ETA"         value={local.eta_fecha}        onSave={sv('eta_fecha')} type="date" />
-              <EField label="Día disp."   value={local.dia_disponible_para_inspeccion} onSave={sv('dia_disponible_para_inspeccion')} type="date" />
-              <EField label="BL#"         value={local.bl}               onSave={sv('bl')} />
-              <EField label="Buque"       value={local.vessel}           onSave={sv('vessel')} />
-              <EField label="Pallets"     value={local.pallets != null ? String(local.pallets) : null} onSave={v => save('pallets', v ? parseInt(v) : null)} type="number" />
-              <EField label="PO"          value={local.po}               onSave={sv('po')} />
-              <EField label="Container"   value={local.unit_id}          onSave={sv('unit_id')} />
-              {local.reinspection_due_date && (
-                <DetailKV label="Reinsp. due" value={fmtDate(local.reinspection_due_date)} />
-              )}
-            </dl>
-          </section>
-
-          <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
-            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Estatus aduanas</p>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <EField label="FDA"        value={local.fda_status}               onSave={sv('fda_status')} />
-              <EField label="Customs"    value={local.customs_status}            onSave={sv('customs_status')} />
-              <EField label="USDA"       value={local.agriculture_usda_status}   onSave={sv('agriculture_usda_status')} />
-              <EField label="Fumigación" value={local.fumigation_status}         onSave={sv('fumigation_status')} />
-            </dl>
-          </section>
-
-          {(local.overall_grade || local.condition_text || local.quality_text) && (
-            <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
-              <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Resultado</p>
-              {local.overall_grade && (
-                <p className={`text-2xl font-bold mb-2 ${gradeColor(local.overall_grade)}`}>Grade {local.overall_grade}</p>
-              )}
-              {local.condition_text && (
-                <div className="mb-2">
-                  <p className="text-[11px] text-gray-400 dark:text-slate-500 mb-0.5">Condición</p>
-                  <p className="text-[13px] text-gray-700 dark:text-slate-300 leading-relaxed">{local.condition_text}</p>
-                </div>
-              )}
-              {local.quality_text && (
-                <div className="mb-2">
-                  <p className="text-[11px] text-gray-400 dark:text-slate-500 mb-0.5">Calidad</p>
-                  <p className="text-[13px] text-gray-700 dark:text-slate-300 leading-relaxed">{local.quality_text}</p>
-                </div>
-              )}
-              {local.report_url && (
-                <a href={local.report_url} target="_blank" rel="noopener noreferrer"
-                   className="inline-flex items-center gap-1 text-[13px] text-blue-600 dark:text-blue-400 hover:underline mt-1">
-                  Ver reporte completo
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                </a>
-              )}
+            <section>
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Estado</p>
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <EField label="Estado general" value={local.estado_general} onSave={sv('estado_general')} options={ESTADO_OPTIONS.map(option => ({ value: option.value, label: option.label }))} />
+                <EField label="Inspección" value={local.inspection_status} onSave={sv('inspection_status')} options={INSPECTION_STATUS_OPTIONS.map(option => ({ value: option.value, label: option.label }))} />
+                <FlagField label="Listo para inspección" checked={local.ready_for_inspection === 1} onSave={next => save('ready_for_inspection', next ? 1 : 0)} />
+                <FlagField label="Arribo confirmado" checked={local.warehouse_arrival_confirmed === 1} onSave={next => save('warehouse_arrival_confirmed', next ? 1 : 0)} />
+                <FlagField label="Reporte enviado" checked={local.report_sent === 1} onSave={next => save('report_sent', next ? 1 : 0)} />
+                <FlagField label="Requiere fumigación" checked={local.requiere_fumigacion === 1} onSave={next => save('requiere_fumigacion', next ? 1 : 0)} />
+              </dl>
             </section>
-          )}
 
-          {local.lots_raw && (
-            <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
-              <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Lots</p>
-              <pre className="text-[12px] text-gray-700 dark:text-slate-300 bg-gray-50 dark:bg-slate-800 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{local.lots_raw}</pre>
+            <section className="border-t border-hairline pt-4">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Identificación</p>
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <EField label="Cliente" value={local.cliente} onSave={sv('cliente')} />
+                <EField label="Tipo de carga" value={local.tipo_carga} onSave={sv('tipo_carga')} options={TIPO_CARGA_OPTIONS.map(option => ({ value: option.value, label: option.label }))} />
+                <EField label="Location" value={local.location} onSave={sv('location')} />
+                <EField label="Container" value={local.unit_id} onSave={sv('unit_id')} />
+                <EField label="PO" value={local.po} onSave={sv('po')} />
+                <EField label="BL#" value={local.bl} onSave={sv('bl')} />
+                <EField label="Carrier" value={local.carrier} onSave={sv('carrier')} />
+                <EField label="Buque" value={local.vessel} onSave={sv('vessel')} />
+                <DetailKV label="Cliente norm" value={local.cliente_norm} mono />
+                <DetailKV label="Container norm" value={local.unit_id_norm} mono />
+                <DetailKV label="PO norm" value={local.po_norm} mono />
+                <DetailKV label="Lookup key" value={lookupKey} mono />
+              </dl>
             </section>
-          )}
 
-          <InspectorDropdown shipment={local} />
+            <section className="border-t border-hairline pt-4">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Logística</p>
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <EField label="Commodity" value={local.commodity} onSave={sv('commodity')} />
+                <EField label="Descripción cantidad" value={local.quantity_description} onSave={sv('quantity_description')} />
+                <EField label="Warehouse / Shipper" value={local.shipper} onSave={sv('shipper')} />
+                <EField label="País de origen" value={local.country_of_origin} onSave={sv('country_of_origin')} />
+                <EField label="ETA" value={local.eta_fecha} onSave={sv('eta_fecha')} type="date" />
+                <EField label="Hora ETA" value={local.eta_hora} onSave={sv('eta_hora')} type="time" />
+                <EField label="Día disponible" value={local.dia_disponible_para_inspeccion} onSave={sv('dia_disponible_para_inspeccion')} type="date" />
+                <EField label="Arribo warehouse" value={local.warehouse_arrival_at} onSave={sv('warehouse_arrival_at')} />
+                <EField label="Pallets" value={local.pallets != null ? String(local.pallets) : null} onSave={value => save('pallets', toNullableNumber(value))} type="number" />
+                <EField label="Fuente" value={local.fuente} onSave={sv('fuente')} />
+              </dl>
+            </section>
 
-          <section className="border-t border-gray-100 dark:border-slate-800 pt-4">
-            <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Comentarios</p>
-            <EField label="" value={local.comments_raw} onSave={sv('comments_raw')} multiline />
-          </section>
+            <section className="border-t border-hairline pt-4">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Cumplimiento</p>
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <EField label="FDA" value={local.fda_status} onSave={sv('fda_status')} />
+                <EField label="Customs" value={local.customs_status} onSave={sv('customs_status')} />
+                <EField label="USDA" value={local.agriculture_usda_status} onSave={sv('agriculture_usda_status')} />
+                <EField label="Fumigación" value={local.fumigation_status} onSave={sv('fumigation_status')} />
+                <EField label="Fumigación completada" value={local.fumigation_completed_at} onSave={sv('fumigation_completed_at')} />
+                <EField label="Reinspección vence" value={local.reinspection_due_date} onSave={sv('reinspection_due_date')} type="date" />
+              </dl>
+            </section>
+
+            <section className="border-t border-hairline pt-4">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Resultado</p>
+                {local.overall_grade && <span className={`text-sm font-semibold ${gradeColor(local.overall_grade)}`}>Grade {local.overall_grade}</span>}
+              </div>
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+                <EField label="Grade" value={local.overall_grade} onSave={sv('overall_grade')} />
+                <EField label="Fecha reporte" value={local.report_date} onSave={sv('report_date')} type="date" />
+                <EField label="URL reporte" value={local.report_url} onSave={sv('report_url')} className="sm:col-span-2" />
+                <EField label="Archivo PSI" value={local.psi_file} onSave={sv('psi_file')} className="sm:col-span-2" />
+                <EField label="Condición" value={local.condition_text} onSave={sv('condition_text')} multiline className="sm:col-span-2" />
+                <EField label="Calidad" value={local.quality_text} onSave={sv('quality_text')} multiline className="sm:col-span-2" />
+              </dl>
+            </section>
+
+            <InspectorDropdown value={local.inspector_id} onSave={value => save('inspector_id', value)} />
+
+            <section className="border-t border-hairline pt-4">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Notas</p>
+              <dl className="grid grid-cols-1 gap-x-4 gap-y-3">
+                <EField label="Lots" value={local.lots_raw} onSave={sv('lots_raw')} multiline className="sm:col-span-2" />
+                <EField label="Comentarios" value={local.comments_raw} onSave={sv('comments_raw')} multiline className="sm:col-span-2" />
+                <DetailKV label="Última actualización" value={local.ultima_actualizacion ? new Date(local.ultima_actualizacion).toLocaleString() : '—'} className="sm:col-span-2" />
+              </dl>
+            </section>
+          </div>
         </div>
       </div>
-    </div>
+
+      {deleteOpen && (
+        <Modal
+          title="¿Eliminar inspección?"
+          onClose={() => setDeleteOpen(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setDeleteOpen(false)} disabled={deleting}>
+                Cancelar
+              </Button>
+              <Button variant="danger" icon="trash" onClick={handleDelete} disabled={deleting}>
+                {deleting ? 'Eliminando…' : 'Eliminar'}
+              </Button>
+            </>
+          )}
+        >
+          <p className="text-sm text-ink-tertiary">
+            Se eliminará la inspección de {local.cliente} con referencia {local.unit_id ?? local.po ?? `#${local.id}`}. Esta acción no se puede deshacer.
+          </p>
+        </Modal>
+      )}
+    </>
   )
 }
 
-function DetailKV({ label, value }: { label: string; value: string | null | undefined }) {
+function DetailKV({
+  label,
+  value,
+  mono,
+  className,
+}: {
+  label: string
+  value: string | null | undefined
+  mono?: boolean
+  className?: string
+}) {
   return (
-    <div>
-      <dt className="text-[11px] text-gray-400 dark:text-slate-500">{label}</dt>
-      <dd className="text-[13px] text-gray-800 dark:text-slate-200 mt-0.5">{value || '—'}</dd>
+    <div className={className}>
+      <dt className="text-[11px] text-ink-muted">{label}</dt>
+      <dd className={`mt-0.5 break-words text-[13px] text-ink-secondary ${mono ? 'font-mono text-[12px]' : ''}`}>{value || '—'}</dd>
     </div>
   )
 }
@@ -704,44 +1101,65 @@ function DetailKV({ label, value }: { label: string; value: string | null | unde
 type EFieldOption = { value: string; label: string }
 
 function EField({
-  label, value, onSave, type = 'text', options, multiline,
+  label,
+  value,
+  onSave,
+  type = 'text',
+  options,
+  multiline,
+  className,
 }: {
   label: string
   value: string | number | null | undefined
-  onSave: (v: string | null) => void
-  type?: 'text' | 'date' | 'number'
+  onSave: (v: string | null) => void | Promise<boolean>
+  type?: 'text' | 'date' | 'number' | 'time'
   options?: EFieldOption[]
   multiline?: boolean
+  className?: string
 }) {
   const [editing, setEditing] = useState(false)
-  const [draft,   setDraft]   = useState(String(value ?? ''))
+  const [draft, setDraft] = useState(String(value ?? ''))
 
   useEffect(() => { if (!editing) setDraft(String(value ?? '')) }, [value, editing])
 
-  function confirm() { setEditing(false); onSave(draft.trim() || null) }
-  function cancel()  { setDraft(String(value ?? '')); setEditing(false) }
-
-  function handleKey(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && !multiline) confirm()
-    if (e.key === 'Escape') cancel()
+  function confirm() {
+    setEditing(false)
+    void onSave(draft.trim() || null)
   }
 
-  const inputCls = 'w-full text-[13px] border border-blue-300 dark:border-blue-600 rounded px-1.5 py-0.5 bg-white dark:bg-slate-700 text-gray-800 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-blue-500'
+  function cancel() {
+    setDraft(String(value ?? ''))
+    setEditing(false)
+  }
+
+  function handleKey(event: React.KeyboardEvent) {
+    if (event.key === 'Enter' && !multiline) confirm()
+    if (event.key === 'Escape') cancel()
+  }
+
+  const inputCls = 'w-full rounded-lg border border-blue-300 bg-white px-2 py-1 text-[13px] text-gray-800 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-blue-600 dark:bg-slate-700 dark:text-slate-100'
+  const hasValue = value != null && value !== ''
 
   return (
-    <div className="group">
-      <dt className="text-[11px] text-gray-400 dark:text-slate-500 flex items-center gap-1">
+    <div className={`group ${className ?? ''}`}>
+      <dt className="flex items-center gap-1 text-[11px] text-ink-muted">
         {label}
-        {!editing && (
+        {!editing && label && (
           <button
-            onClick={e => { e.stopPropagation(); setEditing(true) }}
-            className="opacity-0 group-hover:opacity-50 hover:!opacity-100 transition-opacity"
-            title="Editar"
+            type="button"
+            onClick={event => { event.stopPropagation(); setEditing(true) }}
+            className="inline-flex items-center gap-1 rounded-full border border-hairline px-1.5 py-0.5 text-[10px] text-ink-muted transition-colors hover:border-blue-300 hover:text-blue-600 dark:hover:border-blue-700 dark:hover:text-blue-400"
+            title="Editar campo"
           >
-            <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            <svg className="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+              />
             </svg>
+            Editar
           </button>
         )}
       </dt>
@@ -750,29 +1168,34 @@ function EField({
           options ? (
             <select
               value={draft}
-              onChange={e => { const v = e.target.value; setDraft(v); onSave(v || null); setEditing(false) }}
+              onChange={event => {
+                const next = event.target.value
+                setDraft(next)
+                void onSave(next || null)
+                setEditing(false)
+              }}
               onBlur={cancel}
               className={inputCls}
               autoFocus
             >
               <option value="">—</option>
-              {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           ) : multiline ? (
             <textarea
               value={draft}
-              onChange={e => setDraft(e.target.value)}
+              onChange={event => setDraft(event.target.value)}
               onBlur={confirm}
               onKeyDown={handleKey}
-              className={`${inputCls} resize-none`}
-              rows={3}
+              className={`${inputCls} resize-y`}
+              rows={4}
               autoFocus
             />
           ) : (
             <input
               type={type}
               value={draft}
-              onChange={e => setDraft(e.target.value)}
+              onChange={event => setDraft(event.target.value)}
               onBlur={confirm}
               onKeyDown={handleKey}
               className={inputCls}
@@ -780,23 +1203,55 @@ function EField({
             />
           )
         ) : (
-          <span
-            className="text-[13px] text-gray-800 dark:text-slate-200 block py-0.5 cursor-text hover:bg-gray-50 dark:hover:bg-slate-700/50 rounded -mx-0.5 px-0.5 transition-colors"
-            onDoubleClick={() => setEditing(true)}
-            title="Doble clic para editar"
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className={`block w-full rounded-lg border px-2.5 py-2 text-left text-[13px] transition-colors ${
+              hasValue
+                ? 'border-hairline bg-surface text-ink-secondary hover:border-blue-300 hover:bg-surface-muted/50 dark:hover:border-blue-700'
+                : 'border-dashed border-hairline bg-surface text-ink-muted hover:border-blue-300 hover:text-ink-secondary dark:hover:border-blue-700'
+            }`}
+            title="Toca para editar"
           >
-            {value != null && value !== '' ? String(value) : <span className="text-gray-300 dark:text-slate-600">—</span>}
-          </span>
+            {hasValue ? String(value) : 'Toca para agregar'}
+          </button>
         )}
       </dd>
     </div>
   )
 }
 
-function InspectorDropdown({ shipment }: { shipment: Shipment }) {
+function FlagField({
+  label,
+  checked,
+  onSave,
+}: {
+  label: string
+  checked: boolean
+  onSave: (next: boolean) => void | Promise<boolean>
+}) {
+  return (
+    <div>
+      <dt className="text-[11px] text-ink-muted">{label}</dt>
+      <dd className="mt-1">
+        <Switch checked={checked} onChange={next => void onSave(next)} label={checked ? 'Sí' : 'No'} />
+      </dd>
+    </div>
+  )
+}
+
+function InspectorDropdown({
+  value,
+  onSave,
+}: {
+  value: number | null
+  onSave: (value: number | null) => Promise<boolean>
+}) {
   const [staff, setStaff] = useState<Staff[]>([])
-  const [inspectorId, setInspectorId] = useState<number | null>(shipment.inspector_id)
+  const [inspectorId, setInspectorId] = useState<number | null>(value)
   const [saving, setSaving] = useState(false)
+
+  useEffect(() => { setInspectorId(value) }, [value])
 
   useEffect(() => {
     supabase
@@ -808,31 +1263,33 @@ function InspectorDropdown({ shipment }: { shipment: Shipment }) {
       .then(({ data }) => setStaff((data ?? []) as Staff[]))
   }, [])
 
-  async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const val = e.target.value ? Number(e.target.value) : null
+  async function handleChange(event: React.ChangeEvent<HTMLSelectElement>) {
+    const next = event.target.value ? Number(event.target.value) : null
+    const previous = inspectorId
+    setInspectorId(next)
     setSaving(true)
-    await supabase.from('shipments').update({ inspector_id: val }).eq('id', shipment.id)
-    setInspectorId(val)
+    const ok = await onSave(next)
+    if (!ok) setInspectorId(previous)
     setSaving(false)
   }
 
   return (
-    <div className="border-t border-gray-100 dark:border-slate-800 pt-4">
-      <p className="text-[11px] font-semibold text-gray-400 dark:text-slate-500 uppercase tracking-wide mb-2">Inspector</p>
+    <div className="border-t border-hairline pt-4">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Inspector</p>
       <select
         value={inspectorId ?? ''}
         onChange={handleChange}
         disabled={saving}
-        className="w-full text-[13px] border border-gray-200 dark:border-slate-600 rounded-lg px-2.5 py-1.5 text-gray-800 dark:text-slate-200 bg-white dark:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+        className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-[13px] text-ink-secondary focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 dark:border-slate-600 dark:bg-surface-sunk"
       >
         <option value="">Sin asignar</option>
-        {staff.map(m => (
-          <option key={m.id} value={m.id}>
-            {m.name}{m.zone ? ` (${m.zone})` : ''}
+        {staff.map(member => (
+          <option key={member.id} value={member.id}>
+            {member.name}{member.zone ? ` (${member.zone})` : ''}
           </option>
         ))}
       </select>
-      {saving && <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1">Guardando…</p>}
+      {saving && <p className="mt-1 text-[11px] text-ink-muted">Guardando…</p>}
     </div>
   )
 }
@@ -883,7 +1340,7 @@ function NotificationBell() {
         onClick={handleOpen}
         aria-expanded={open}
         aria-label="Abrir notificaciones"
-        className="relative rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-gray-500 dark:text-slate-400 transition hover:text-gray-900 dark:hover:text-slate-100"
+        className="relative rounded-lg border border-hairline bg-surface p-1.5 text-ink-tertiary transition hover:text-gray-900 dark:hover:text-slate-100"
         title="Notificaciones"
       >
         <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -898,8 +1355,8 @@ function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-1.5 w-80 rounded-xl border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg">
-          <div className="flex items-center justify-between border-b border-gray-100 dark:border-slate-700 px-3 py-2">
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-80 rounded-xl border border-hairline bg-surface shadow-lg">
+          <div className="flex items-center justify-between border-b border-hairline px-3 py-2">
             <p className="text-[12px] font-semibold text-gray-700 dark:text-slate-200">Notificaciones</p>
             {todayCount > 0 && (
               <span className="text-[10px] font-medium bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 px-1.5 py-0.5 rounded-full">{todayCount} hoy</span>
@@ -907,13 +1364,13 @@ function NotificationBell() {
           </div>
           <div className="max-h-72 overflow-y-auto divide-y divide-gray-50 dark:divide-slate-700">
             {history.length === 0 ? (
-              <p className="py-8 text-center text-[13px] text-gray-400 dark:text-slate-500">Sin notificaciones</p>
+              <p className="py-8 text-center text-[13px] text-ink-muted">Sin notificaciones</p>
             ) : history.map(n => (
-              <div key={n.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-gray-50 dark:hover:bg-slate-700/50">
+              <div key={n.id} className="px-3 py-2.5 flex items-start gap-2.5 hover:bg-surface-muted/50">
                 <span className="text-base leading-none mt-0.5 shrink-0">{eventIcon(n.event_type)}</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[12px] text-gray-700 dark:text-slate-300 leading-snug">{n.message}</p>
-                  <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-0.5">{timeAgo(n.sent_at)}</p>
+                  <p className="text-[12px] text-ink-secondary leading-snug">{n.message}</p>
+                  <p className="text-[11px] text-ink-muted mt-0.5">{timeAgo(n.sent_at)}</p>
                 </div>
               </div>
             ))}
@@ -936,12 +1393,12 @@ function BriefingCard({ s, onClick }: { s: Shipment; onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className={`group relative block w-full overflow-hidden rounded-xl border bg-white dark:bg-slate-800 p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md active:scale-[0.998] ${
+      className={`group relative block w-full overflow-hidden rounded-xl border bg-surface p-4 text-left transition hover:-translate-y-0.5 hover:shadow-md active:scale-[0.998] ${
         isOverdue
           ? 'border-red-200 dark:border-red-800'
           : isReady
           ? 'border-emerald-200 dark:border-emerald-800'
-          : 'border-gray-200 dark:border-slate-700'
+          : 'border-hairline'
       }`}
     >
       <div className={`absolute inset-x-0 top-0 h-0.5 ${
@@ -950,24 +1407,24 @@ function BriefingCard({ s, onClick }: { s: Shipment; onClick: () => void }) {
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="min-w-0">
           <p className={`text-[10px] font-bold uppercase tracking-wider ${
-            isOverdue ? 'text-red-600 dark:text-red-400' : isReady ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-slate-400'
+            isOverdue ? 'text-red-600 dark:text-red-400' : isReady ? 'text-emerald-600 dark:text-emerald-400' : 'text-ink-tertiary'
           }`}>{s.cliente}</p>
-          <p className="font-mono text-[14px] font-bold text-gray-900 dark:text-slate-100 mt-0.5 truncate">{s.unit_id ?? s.po ?? '—'}</p>
-          {s.po && s.unit_id && <p className="font-mono text-[11px] text-gray-400 dark:text-slate-500 truncate">PO {s.po}</p>}
+          <p className="font-mono text-[14px] font-bold text-ink-primary mt-0.5 truncate">{s.unit_id ?? s.po ?? '—'}</p>
+          {s.po && s.unit_id && <p className="font-mono text-[11px] text-ink-muted truncate">PO {s.po}</p>}
         </div>
         <StatusBadge s={s} />
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 mt-2">
-        {s.commodity && <span className="text-[12px] text-gray-700 dark:text-slate-300">{s.commodity}</span>}
+        {s.commodity && <span className="text-[12px] text-ink-secondary">{s.commodity}</span>}
         {s.location && (
-          <span className="text-[11px] bg-gray-100 dark:bg-slate-700 text-gray-500 dark:text-slate-400 px-1.5 py-0.5 rounded">{s.location}</span>
+          <span className="text-[11px] bg-surface-sunk text-ink-tertiary px-1.5 py-0.5 rounded">{s.location}</span>
         )}
-        {s.pallets != null && <span className="text-[11px] text-gray-400 dark:text-slate-500">{s.pallets} plt</span>}
+        {s.pallets != null && <span className="text-[11px] text-ink-muted">{s.pallets} plt</span>}
       </div>
 
       {(s.fda_status || s.fumigation_status || s.agriculture_usda_status) && (
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-2.5 pt-2.5 border-t border-gray-100 dark:border-slate-700">
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-2.5 pt-2.5 border-t border-hairline">
           {s.fda_status && (
             <span className={`text-[11px] font-medium ${
               s.fda_status.toUpperCase().includes('RELEAS') ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
@@ -988,7 +1445,7 @@ function BriefingCard({ s, onClick }: { s: Shipment; onClick: () => void }) {
       )}
 
       {s.shipper && (
-        <p className="text-[11px] text-gray-400 dark:text-slate-500 mt-1.5 truncate">{s.shipper}</p>
+        <p className="text-[11px] text-ink-muted mt-1.5 truncate">{s.shipper}</p>
       )}
     </button>
   )
@@ -1029,7 +1486,7 @@ function BriefingPanel({ shipments, onSelect }: { shipments: Shipment[]; onSelec
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
             d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        <p className="text-[14px] text-gray-400 dark:text-slate-500">Sin inspecciones para hoy ni mañana</p>
+        <p className="text-[14px] text-ink-muted">Sin inspecciones para hoy ni mañana</p>
       </div>
     )
   }
@@ -1046,7 +1503,7 @@ function BriefingPanel({ shipments, onSelect }: { shipments: Shipment[]; onSelec
               </span>
             </span>
             {group.sublabel && (
-              <span className="text-[12px] text-gray-400 dark:text-slate-500">{group.sublabel}</span>
+              <span className="text-[12px] text-ink-muted">{group.sublabel}</span>
             )}
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
@@ -1090,6 +1547,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const [colFilters,  setColFilters]  = useState<Record<string, string>>({})
   const [sort,        setSort]        = useState<SortState>(null)
   const [selected,    setSelected]    = useState<Shipment | null>(null)
+  const [createOpen,  setCreateOpen]  = useState(false)
   const dragColKey = useRef<string | null>(null)
 
   useEffect(() => {
@@ -1147,6 +1605,47 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   function handlePanelClose(dirty: boolean) {
     setSelected(null)
     if (dirty) router.refresh()
+  }
+
+  async function handleCreateShipment(form: NewShipmentForm) {
+    const payload = {
+      cliente: form.cliente.trim(),
+      cliente_norm: normalizeClientName(form.cliente),
+      tipo_carga: form.tipo_carga,
+      location: toNullable(form.location),
+      unit_id: toNullable(form.unit_id),
+      unit_id_norm: normalizeUnitId(form.unit_id),
+      po: toNullable(form.po),
+      po_norm: normalizePo(form.po),
+      commodity: toNullable(form.commodity),
+      shipper: toNullable(form.shipper),
+      country_of_origin: toNullable(form.country_of_origin),
+      eta_fecha: toNullable(form.eta_fecha),
+      dia_disponible_para_inspeccion: toNullable(form.dia_disponible_para_inspeccion),
+      inspection_status: form.inspection_status,
+      estado_general: form.estado_general,
+      ready_for_inspection: form.ready_for_inspection ? 1 : 0,
+      warehouse_arrival_confirmed: 0,
+      report_sent: 0,
+      requiere_fumigacion: 0,
+      pallets: toNullableNumber(form.pallets),
+      comments_raw: toNullable(form.comments_raw),
+      ultima_actualizacion: new Date().toISOString(),
+    }
+
+    const { data, error } = await supabase
+      .from('shipments')
+      .insert(payload)
+      .select(SHIPMENT_SELECT)
+      .single()
+
+    if (error) {
+      throw new Error(error.message)
+    }
+
+    setCreateOpen(false)
+    setSelected(data as Shipment)
+    startTransition(() => { router.refresh() })
   }
 
   const visibleColumns = useMemo(
@@ -1267,18 +1766,18 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   // ─── render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="relative flex min-h-screen bg-gray-50 dark:bg-slate-950 text-gray-900 dark:text-slate-100">
+    <div className="relative flex min-h-screen bg-canvas text-ink-primary">
 
       {/* ── Sidebar ── */}
-      <nav className="hidden w-56 shrink-0 flex-col border-r border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-5 lg:flex">
+      <nav className="hidden w-56 shrink-0 flex-col border-r border-hairline bg-surface px-3 py-5 lg:flex">
         {/* Logo */}
         <div className="flex items-center gap-2.5 px-3 mb-6">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 dark:bg-slate-100 text-white dark:text-slate-900 text-xs font-bold shrink-0">
             IM
           </div>
           <div>
-            <p className="text-[12px] font-semibold text-gray-900 dark:text-slate-100 leading-tight">Inspection Master</p>
-            <p className="text-[11px] text-gray-400 dark:text-slate-500">Elite QA</p>
+            <p className="text-[12px] font-semibold text-ink-primary leading-tight">Inspection Master</p>
+            <p className="text-[11px] text-ink-muted">Elite QA</p>
           </div>
         </div>
 
@@ -1290,9 +1789,21 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
             </svg>
           </NavItem>
 
+          <NavItem href="/agenda" label="Agenda">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008zM12 15h.008v.008H12V15zm0 2.25h.008v.008H12v-.008zM9.75 15h.008v.008H9.75V15zm0 2.25h.008v.008H9.75v-.008zM7.5 15h.008v.008H7.5V15zm0 2.25h.008v.008H7.5v-.008zm6.75-4.5h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008V15zm0 2.25h.008v.008h-.008v-.008zm2.25-4.5h.008v.008H16.5v-.008zm0 2.25h.008v.008H16.5V15z" />
+            </svg>
+          </NavItem>
+
           <NavItem href="/staff" label="Equipo">
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
+            </svg>
+          </NavItem>
+
+          <NavItem href="/clients" label="Clientes">
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5A2.25 2.25 0 015.25 5.25h13.5A2.25 2.25 0 0121 7.5v9A2.25 2.25 0 0118.75 18.75H5.25A2.25 2.25 0 013 16.5v-9zM7.5 9.75h4.5m-4.5 3h9" />
             </svg>
           </NavItem>
 
@@ -1310,13 +1821,13 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
         </div>
 
         {/* User */}
-        <div className="flex items-center gap-2.5 px-3 pt-4 border-t border-gray-100 dark:border-slate-800">
+        <div className="flex items-center gap-2.5 px-3 pt-4 border-t border-hairline">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-500 text-[11px] font-bold text-white shrink-0">
             MM
           </div>
           <div className="min-w-0">
-            <p className="text-[13px] font-medium text-gray-900 dark:text-slate-100 truncate">Matias</p>
-            <p className="text-[11px] text-gray-400 dark:text-slate-500 truncate">Operador</p>
+            <p className="text-[13px] font-medium text-ink-primary truncate">Matias</p>
+            <p className="text-[11px] text-ink-muted truncate">Operador</p>
           </div>
         </div>
       </nav>
@@ -1325,7 +1836,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       <div className="flex flex-1 flex-col min-h-screen min-w-0">
 
         {/* Top bar */}
-        <header className="sticky top-0 z-20 border-b border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <header className="sticky top-0 z-20 border-b border-hairline bg-surface">
           <div className="px-4 sm:px-6">
             {/* Title row */}
             <div className="flex items-center justify-between h-14 gap-4">
@@ -1334,12 +1845,12 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                 <div className="flex h-7 w-7 items-center justify-center rounded-md bg-gray-900 dark:bg-slate-100 text-white dark:text-slate-900 text-[11px] font-bold">
                   IM
                 </div>
-                <span className="text-sm font-semibold text-gray-900 dark:text-slate-100">Inspecciones</span>
+                <span className="text-sm font-semibold text-ink-primary">Inspecciones</span>
               </div>
-              <h1 className="hidden lg:block text-sm font-semibold text-gray-900 dark:text-slate-100">
+              <h1 className="hidden lg:block text-sm font-semibold text-ink-primary">
                 Inspecciones
                 {lastUpdateIso && (
-                  <span className="ml-2 text-[11px] font-normal text-gray-400 dark:text-slate-500">
+                  <span className="ml-2 text-[11px] font-normal text-ink-muted">
                     · actualizado {timeAgo(lastUpdateIso)}
                   </span>
                 )}
@@ -1348,16 +1859,22 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
               <div className="flex items-center gap-2">
                 <Link
                   href="/staff"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-[13px] text-gray-600 dark:text-slate-300 hover:text-gray-900 dark:hover:text-slate-100 lg:hidden"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[13px] text-ink-secondary hover:text-gray-900 dark:hover:text-slate-100 lg:hidden"
                 >
                   Equipo
+                </Link>
+                <Link
+                  href="/clients"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-hairline bg-surface px-3 py-1.5 text-[13px] text-ink-secondary hover:text-gray-900 dark:hover:text-slate-100 lg:hidden"
+                >
+                  Clientes
                 </Link>
                 <NotificationBell />
                 <button
                   onClick={handleRefresh}
                   disabled={refreshing}
                   aria-label="Actualizar"
-                  className="rounded-lg border border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-gray-500 dark:text-slate-400 hover:text-gray-900 dark:hover:text-slate-100 disabled:opacity-40 transition-colors"
+                  className="rounded-lg border border-hairline bg-surface p-1.5 text-ink-tertiary hover:text-gray-900 dark:hover:text-slate-100 disabled:opacity-40 transition-colors"
                 >
                   <svg className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -1397,29 +1914,33 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
               {anyFilter && (
                 <button
                   onClick={clearAll}
-                  className="text-[12px] text-gray-400 dark:text-slate-500 hover:text-gray-700 dark:hover:text-slate-300 underline underline-offset-2"
+                  className="text-[12px] text-ink-muted hover:text-gray-700 dark:hover:text-slate-300 underline underline-offset-2"
                 >
                   Limpiar
                 </button>
               )}
             </div>
 
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <Button size="sm" icon="plus" onClick={() => setCreateOpen(true)}>
+                Nueva inspección
+              </Button>
+
               <button
                 onClick={() => { setFilterHoy(h => !h); setEstado('abierto') }}
                 className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[13px] font-medium transition-colors ${
                   filterHoy
                     ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
-                    : 'border-gray-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:border-gray-300 dark:hover:border-slate-600'
+                    : 'border-hairline bg-surface text-ink-secondary hover:border-gray-300 dark:hover:border-slate-600'
                 }`}
               >
                 {filterHoy ? '★' : '☆'} Agenda 48h
-                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gray-100 dark:bg-slate-700 px-1.5 text-[11px] font-bold text-gray-600 dark:text-slate-400">
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-surface-sunk px-1.5 text-[11px] font-bold text-gray-600 dark:text-slate-400">
                   {stats.paraHoy}
                 </span>
               </button>
 
-              <span className="text-[12px] text-gray-400 dark:text-slate-500 whitespace-nowrap">
+              <span className="text-[12px] text-ink-muted whitespace-nowrap">
                 {filtered.length} / {shipments.length}
               </span>
 
@@ -1429,19 +1950,19 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
 
           {/* Content area */}
           {filterHoy ? (
-            <div className="rounded-xl border border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
-              <div className="px-5 py-3 border-b border-gray-100 dark:border-slate-800">
-                <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Agenda — hoy y mañana</h2>
+            <div className="rounded-xl border border-hairline bg-surface overflow-hidden">
+              <div className="px-5 py-3 border-b border-hairline">
+                <h2 className="text-sm font-semibold text-ink-primary">Agenda — hoy y mañana</h2>
               </div>
               <div className="p-5">
                 <BriefingPanel shipments={filtered} onSelect={setSelected} />
               </div>
             </div>
           ) : (
-            <div className="rounded-xl border border-gray-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+            <div className="rounded-xl border border-hairline bg-surface overflow-hidden">
               {/* Table legend */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-slate-800">
-                <h2 className="text-sm font-semibold text-gray-900 dark:text-slate-100">Tabla operativa</h2>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-hairline">
+                <h2 className="text-sm font-semibold text-ink-primary">Tabla operativa</h2>
                 <div className="flex items-center gap-3 text-[11px]">
                   <span className="inline-flex items-center gap-1.5 text-red-600 dark:text-red-400">
                     <span className="h-1.5 w-1.5 rounded-full bg-red-500" />Urgente
@@ -1469,8 +1990,8 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                             onDragOver={e => e.preventDefault()}
                             onDrop={() => handleColDrop(col.key)}
                             onClick={() => handleSort(col.key)}
-                            className={`sticky top-0 z-10 cursor-pointer select-none whitespace-nowrap border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-800/60 px-3 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500 dark:text-slate-400 transition-colors hover:bg-gray-100 dark:hover:bg-slate-700/50 ${
-                              isActive ? 'text-gray-900 dark:text-slate-100' : ''
+                            className={`sticky top-0 z-10 cursor-pointer select-none whitespace-nowrap border-b border-hairline bg-surface-sunk px-3 py-2.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-tertiary transition-colors hover:bg-gray-100 dark:hover:bg-surface-muted ${
+                              isActive ? 'text-ink-primary' : ''
                             } ${col.tdClass ?? ''}`}
                           >
                             <span className="inline-flex items-center gap-1.5">
@@ -1501,17 +2022,17 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                           onClick={() => setSelected(s)}
                           className={[
                             'group cursor-pointer transition-colors',
-                            isCerrado ? 'opacity-50 hover:bg-gray-50 dark:hover:bg-slate-800/40' : '',
+                            isCerrado ? 'opacity-50 hover:bg-surface-muted' : '',
                             isOverdue ? 'bg-red-50/50 dark:bg-red-950/20 hover:bg-red-100/50 dark:hover:bg-red-950/30' : '',
                             isHoy ? 'bg-amber-50/50 dark:bg-amber-950/20 hover:bg-amber-100/50 dark:hover:bg-amber-950/30' : '',
                             isListo && !isOverdue && !isHoy ? 'hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20' : '',
-                            !isListo && !isCerrado ? 'hover:bg-gray-50 dark:hover:bg-slate-800/40' : '',
+                            !isListo && !isCerrado ? 'hover:bg-surface-muted' : '',
                           ].filter(Boolean).join(' ')}
                         >
                           {visibleColumns.map(col => (
                             <td
                               key={col.key}
-                              className={`border-b border-gray-100 dark:border-slate-800/60 px-3 py-3 whitespace-nowrap ${col.tdClass ?? ''}`}
+                              className={`border-b border-hairline/60 px-3 py-3 whitespace-nowrap ${col.tdClass ?? ''}`}
                             >
                               {col.render(s)}
                             </td>
@@ -1527,7 +2048,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                             <svg className="h-8 w-8 text-gray-200 dark:text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.75 15.75L18 18m-3.75-2.25A6.75 6.75 0 1118 9a6.75 6.75 0 01-3.75 6.75z" />
                             </svg>
-                            <p className="text-sm text-gray-500 dark:text-slate-400">Sin resultados con los filtros actuales.</p>
+                            <p className="text-sm text-ink-tertiary">Sin resultados con los filtros actuales.</p>
                             <button onClick={clearAll} className="text-[13px] text-blue-600 dark:text-blue-400 hover:underline">
                               Limpiar filtros
                             </button>
@@ -1545,6 +2066,12 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
 
       {/* Detail panel */}
       {selected && <DetailPanel s={selected} onClose={handlePanelClose} />}
+
+      <CreateShipmentModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreate={handleCreateShipment}
+      />
 
       {/* Toast notifications */}
       <ToastList toasts={toasts} onDismiss={dismiss} />

@@ -83,10 +83,12 @@ fresh_way:
     - "FRESH WAY"
     - "Fresh Way USA"
     - "FRESH WAY USA"
+    - "FreshWay"
   subject_patterns:
     - "FRESH WAY"
     - "VEGLAND"
     - "INSPECCION VEGLAND"
+    - "INSPECCION 4EARTH"
   cutoff_hour: null
   location: [Miami, Texas, Los Angeles]
   known_modes: [ocean, air, terrestre]
@@ -207,3 +209,16 @@ sol_de_ica:
   cutoff_hour: null
   location: Miami
   known_modes: [ocean, air]
+
+twin_river:
+  display_name: "Twin River"
+  aliases:
+    - "Twin River"
+    - "TWIN RIVER"
+    - "Twin River Berries"
+    - "TR Berries"
+  subject_patterns:
+    - "TWIN RIVER"
+  cutoff_hour: null
+  location: Texas
+  known_modes: [terrestre]

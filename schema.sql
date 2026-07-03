@@ -116,3 +116,18 @@ CREATE TABLE IF NOT EXISTS header_mapping_cache (
     mapping_json TEXT NOT NULL,
     created_at   TEXT NOT NULL
 );
+
+-- Client registry surfaced on the /clients dashboard page. config/clients.yaml
+-- remains the agent's own source of truth; this table mirrors the Supabase
+-- `clients` table (see migrations/004_add_clients.sql) for schema parity —
+-- the Python agent does not read or write it.
+CREATE TABLE IF NOT EXISTS clients (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    display_name TEXT NOT NULL,
+    slug         TEXT NOT NULL UNIQUE,
+    locations    TEXT,          -- JSON array e.g. '["Miami","Texas"]'
+    known_modes  TEXT,          -- JSON array e.g. '["ocean","air"]'
+    cutoff_hour  INTEGER,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);

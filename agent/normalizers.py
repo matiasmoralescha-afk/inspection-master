@@ -173,13 +173,28 @@ def normalize_date(s: Optional[str]) -> Optional[str]:
             year = datetime.now().year
             return f'{year}-{month_num}-{day.zfill(2)}'
 
-    # Fallback: extract MM/DD/YY from a longer string
-    # e.g. "ESTIMATED 10:00 AM 06/23/26" → "2026-06-23"
-    m_fb = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', s)
+    # Fallback: extract MM/DD/YY from a longer string, tolerating stray spaces
+    # around the slashes as seen in real Alpine emails:
+    #   "ESTIMATED 10:00 AM 06/23/26"      → "2026-06-23"
+    #   "ESTIMATED 10 :30 AM 07/ 02/ 26"   → "2026-07-02"
+    #   "PENDING ESTIMATED IN MIAMI 06/ 19 /26" → "2026-06-19"
+    compact = re.sub(r'\s*/\s*', '/', s)
+    m_fb = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', compact)
     if m_fb:
         return normalize_date(m_fb.group(1))
 
-    return s  # store raw, don't lose data
+    # Fallback: MM/DD with no year ("07/02@05:00HRS TBC" — Prime Time) →
+    # assume current year, same convention as the DD-Mon formats above.
+    m_md = re.search(r'\b(\d{1,2})/(\d{1,2})\b', compact)
+    if m_md:
+        month, day = m_md.groups()
+        if 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+            return f'{datetime.now().year}-{month.zfill(2)}-{day.zfill(2)}'
+
+    # Unparseable → None. Never return raw text: date columns feed sorting,
+    # comparisons, and the dia_disponible copy — garbage here silently drops
+    # the shipment from the dashboard's agenda views.
+    return None
 
 
 def normalize_time(s: Optional[str]) -> Optional[str]:

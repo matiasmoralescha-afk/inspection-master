@@ -4,11 +4,24 @@ on:
   schedule:
     - cron: '0 * * * *'   # cada hora, en punto
   workflow_dispatch:        # también manual desde GitHub Actions tab
+    inputs:
+      since_hours:
+        description: 'Ventana en horas (vacío = automática desde el último email procesado)'
+        required: false
+        type: string
+
+# Nunca dos agentes a la vez: si una corrida se alarga, la siguiente espera
+# en cola en vez de solaparse (procesamiento duplicado / races en Supabase).
+concurrency:
+  group: inspection-agent
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # La recuperación tras la caída de 36h (07/2026) tomó ~35 min; 10 min
+    # mataba el job justo cuando más se lo necesitaba.
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +34,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -e . -q
+
+      - name: Compile check (fail fast on syntax errors)
+        run: python -m compileall -q agent
 
       - name: Write Gmail token
         run: |
@@ -36,7 +52,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           OCEAN_UPDATE_QUERY: '(subject:"OCEAN REPORT" OR subject:"OCEAN UPDATE") newer_than:7d'
-          AIR_ARRIVALS_QUERY: '(subject:"AIR ARRIVALS" OR subject:"INSPECCION VEGLAND" OR subject:"VEGLAND") newer_than:7d'
+          AIR_ARRIVALS_QUERY: '(subject:"AIR ARRIVALS" OR subject:"AIR UPDATE") newer_than:7d'
+          FRESH_WAY_REQUEST_QUERY: 'subject:INSPECCION newer_than:14d'
+          ALTAR_LOT_QUERY: 'from:@altarproduce.com newer_than:14d'
+          ALPINE_LOT_QUERY: 'from:@alpinefresh.com subject:LOT newer_than:14d'
           SQ1_RECEIVING_CARD_QUERY: 'subject:"SQ1 Inspection Request" newer_than:7d'
           INSPECTION_REPORT_QUERY: 'from:reports@eliteqa.app newer_than:7d'
           PRIME_TIME_PL_QUERY: 'subject:PM- newer_than:30d'
@@ -48,4 +67,34 @@ jobs:
           NOTIFY_WHATSAPP: ${{ secrets.NOTIFY_WHATSAPP }}
           # Recipients — comma-separated emails
           NOTIFY_EMAILS: ${{ secrets.NOTIFY_EMAILS }}
-        run: python -m agent.main --since-hours 4
+          SINCE_HOURS: ${{ github.event.inputs.since_hours }}
+        # Ventana auto-adaptativa: se calcula desde el último email procesado
+        # en Supabase (+2h de margen). Tras una caída, la próxima corrida se
+        # ensancha sola y no pierde correos (un --since-hours fijo salteaba
+        # todo lo más viejo que la ventana). Manual: pasar since_hours.
+        run: |
+          if [ -n "$SINCE_HOURS" ]; then
+            python -m agent.main --since-hours "$SINCE_HOURS"
+          else
+            python -m agent.main --auto-window
+          fi
+
+      # Solo al inicio de una racha de fallos: si la corrida anterior también
+      # falló, la alerta ya se mandó — no spamear un WhatsApp por hora mientras
+      # dure (p. ej.) un token vencido. WhatsApp-only: no depende del Gmail
+      # auth que probablemente acaba de romperse.
+      - name: Alert on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_FROM: ${{ secrets.TWILIO_WHATSAPP_FROM }}
+          NOTIFY_WHATSAPP: ${{ secrets.NOTIFY_WHATSAPP }}
+        run: |
+          prev=$(gh run list --workflow "${{ github.workflow }}" --status completed --limit 1 --json conclusion --jq '.[0].conclusion' 2>/dev/null || echo "")
+          if [ "$prev" = "failure" ]; then
+            echo "La corrida anterior también falló — alerta ya enviada, no repetir."
+          else
+            python -m agent.notify_failure "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi

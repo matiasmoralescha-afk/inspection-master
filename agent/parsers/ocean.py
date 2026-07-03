@@ -18,11 +18,33 @@ logger = logging.getLogger(__name__)
 
 _GREEN_RE = re.compile(r'#00b050', re.IGNORECASE)
 _GRAY_RE  = re.compile(r'#e8e8e8', re.IGNORECASE)
+# Sentinel pattern that never matches — used when the header row is found by the
+# keyword fallback (there is no header background color to skip repeated headers).
+_NEVER_RE = re.compile(r'(?!)')
+
+# Common column names across agencies, used as a content-based fallback when the
+# header background color changes and color detection fails.
+_HEADER_KEYWORDS = (
+    'CONTAINER', 'ETA', 'VESSEL', 'SHIPPER', 'COMMODITY', 'CARRIER',
+    'PALLET', 'ARRIVAL', 'DESCRIPTION', 'CUSTOMS', 'FDA', 'AWB', 'BL',
+)
 
 
 def _bg_match(tag: Tag, pattern: re.Pattern) -> bool:
     style = tag.get('style', '')
     return bool(pattern.search(style))
+
+
+def _looks_like_header(tds: list[Tag]) -> bool:
+    """Heuristic: a row is a header if several of its cells look like column names."""
+    hits = 0
+    for td in tds:
+        text = (_cell_text(td) or '').upper()
+        if not text or len(text) > 40:
+            continue
+        if any(kw in text for kw in _HEADER_KEYWORDS):
+            hits += 1
+    return hits >= 3
 
 
 def _cell_text(cell: Tag) -> Optional[str]:
@@ -41,6 +63,18 @@ def _find_header_row(soup: BeautifulSoup) -> tuple[Optional[Tag], re.Pattern]:
             tds = tr.find_all('td', recursive=False) or tr.find_all('td')
             if tds and any(_bg_match(td, pattern) for td in tds):
                 return tr, pattern
+
+    # Fallback: no known header color matched (agency may have changed styling).
+    # Detect the header row by its content so we don't silently drop shipments.
+    for tr in soup.find_all('tr'):
+        tds = tr.find_all('td', recursive=False) or tr.find_all('td')
+        if tds and _looks_like_header(tds):
+            logger.warning(
+                'Ocean parser: header color not found — using content-based '
+                'fallback. Check whether the agency changed the table styling.'
+            )
+            return tr, _NEVER_RE
+
     return None, _GREEN_RE
 
 

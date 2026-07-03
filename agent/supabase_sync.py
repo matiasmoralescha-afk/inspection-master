@@ -4,7 +4,6 @@ Full upsert of all shipments each run — Supabase is a read replica for the web
 """
 import logging
 import sqlite3
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +56,16 @@ def sync(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> 
 
 def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> int:
     """
-    Pull all existing shipments FROM Supabase into local SQLite.
-    Call at startup in stateless environments (GitHub Actions) so derived
-    fields can be recomputed across all shipments, not just those with
-    emails in the current time window.
+    Pull all existing shipments FROM Supabase into local SQLite, and prune any
+    local row whose lookup_key no longer exists in Supabase (e.g. deleted from
+    the dashboard). Call at startup in stateless environments (GitHub Actions)
+    so derived fields can be recomputed across all shipments, not just those
+    with emails in the current time window.
+
+    Since this runs before any email is processed this run, the prune step
+    only ever removes rows this run itself hasn't (re)created yet — so a
+    dashboard delete is always honored on the next run, instead of being
+    silently resurrected by the final full sync back to Supabase.
     """
     try:
         from supabase import create_client
@@ -73,6 +78,7 @@ def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_
 
         # Columns that SQLite generates — must not be in INSERT
         skip_cols = {'id', 'lookup_key'}
+        seen_lookup_keys: set[str] = set()
 
         while True:
             result = client.table('shipments').select('*').range(offset, offset + page_size - 1).execute()
@@ -81,6 +87,10 @@ def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_
                 break
 
             for row in rows:
+                lookup_key = row.get('lookup_key')
+                if lookup_key:
+                    seen_lookup_keys.add(lookup_key)
+
                 # Build an INSERT OR IGNORE so we don't clobber freshly-parsed data
                 cols = {k: v for k, v in row.items() if k not in skip_cols and v is not None}
                 if not cols:
@@ -96,6 +106,20 @@ def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_
             offset += page_size
             if len(rows) < page_size:
                 break
+
+        # Prune local rows that no longer exist in Supabase. Guarded on a
+        # non-empty Supabase result so a transient empty response can't wipe
+        # out everything.
+        if seen_lookup_keys:
+            existing = {
+                r['lookup_key'] for r in conn.execute('SELECT lookup_key FROM shipments').fetchall()
+            }
+            stale = existing - seen_lookup_keys
+            if stale:
+                conn.executemany(
+                    'DELETE FROM shipments WHERE lookup_key = ?', [(k,) for k in stale],
+                )
+                logger.info('Pruned %d local shipment(s) no longer present in Supabase', len(stale))
 
         conn.commit()
         logger.info('Restored %d shipments from Supabase into SQLite', total)
@@ -161,10 +185,17 @@ def recompute_derived_fields_in_supabase(
                 except ValueError:
                     pass
             else:
-                # Fallback: use eta_fecha
-                eta = row.get('eta_fecha')
+                # Fallback: use eta_fecha — but only when it's actually a date.
+                # Legacy rows carry raw text ("PENDING ESTIMATED...") in
+                # eta_fecha; truncating that to 10 chars is how garbage like
+                # 'PENDING ES' ended up in dia_disponible_para_inspeccion.
+                eta = (row.get('eta_fecha') or '')[:10]
+                try:
+                    date.fromisoformat(eta)
+                except ValueError:
+                    eta = None
                 if eta and eta != row.get('dia_disponible_para_inspeccion'):
-                    updates['dia_disponible_para_inspeccion'] = eta[:10]
+                    updates['dia_disponible_para_inspeccion'] = eta
 
             # --- reinspection_due_date (Altar TX only) ---
             if 'altar' in (row.get('cliente') or '').lower():
@@ -187,6 +218,29 @@ def recompute_derived_fields_in_supabase(
     except Exception:
         logger.exception('recompute_derived_fields_in_supabase failed — non-fatal')
         return 0
+
+
+def last_processed_at(supabase_url: str, service_role_key: str):
+    """
+    Timestamp (ISO string) of the most recently processed email in Supabase,
+    or None. Used to size the Gmail search window adaptively: after an outage
+    the next run widens automatically instead of skipping the gap.
+    """
+    try:
+        from supabase import create_client
+        client = create_client(supabase_url, service_role_key)
+        result = (
+            client.table('processed_messages')
+            .select('processed_at')
+            .order('processed_at', desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = result.data or []
+        return rows[0]['processed_at'] if rows else None
+    except Exception:
+        logger.exception('last_processed_at failed — falling back to widest window')
+        return None
 
 
 def restore_processed_messages(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> int:

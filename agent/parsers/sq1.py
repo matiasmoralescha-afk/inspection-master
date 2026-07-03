@@ -1,20 +1,22 @@
 """
 Square One Farms inspection request email parser.
 
-Two email formats:
+Two email formats, each tied to a different port (confirmed by ops 07/2026):
 1. Transkool (from Laurence Baca / Renzo Garro via Square One):
    Subject: "SQ1 Inspection Request - Transkool - eta 6/29/ LOT ID SDC-0326"
    Subject: "SQ1 Inspection Request - Transkool - eta 6/29 / LOT ID DLOR-0426 / DOL-2926"
-   â Extract lot IDs and ETA from subject line.
+   -> Extract lot IDs and ETA from subject line.
+   -> Transkool is the McAllen warehouse: these lots are always Texas.
 
 2. General (from Angelica Alvarez via ops@elitequalityassurance.com):
    Subject: "SQ1 Inspection Request"
    Body:  "We have these lots arriving at the warehouse today.
            DOL-2726/ DLOR-0126/ DLOR-0226 / Transfer 8-9PM
            TA-7990B/ ZMOU8974727 out of fumigation"
-   â Extract lot IDs (and optional container numbers) from body text.
+   -> Extract lot IDs (and optional container numbers) from body text.
+   -> These arrivals are always the Miami warehouse.
 
-Returns one record per lot with: {lot_id, unit_id, awb, eta_fecha}
+Returns one record per lot with: {lot_id, unit_id, awb, eta_fecha, location}
 """
 import re
 import logging
@@ -31,8 +33,8 @@ _LOT_RE = re.compile(r'\b([A-Z]{2,5}-\d{3,6}[A-Z]?)\b', re.IGNORECASE)
 # ISO container number: 4 letters + 6-7 digits
 _CONTAINER_RE = re.compile(r'\b([A-Z]{4}\d{6,7})\b', re.IGNORECASE)
 
-# Air waybill: "729-9118 1381" or "369 â 1022 5574" or "729-91180972"
-_AWB_RE = re.compile(r'\b(\d{3}[\sââ\-]+\d{4}[\sââ\-]?\d{4})\b')
+# Air waybill: "729-9118 1381" or "369 – 1022 5574" or "729-91180972"
+_AWB_RE = re.compile(r'\b(\d{3}[\s–—\-]+\d{4}[\s–—\-]?\d{4})\b')
 
 # ETA in subject: "eta 6/29" or "eta 6/29/26"
 _ETA_RE = re.compile(r'\beta\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)', re.IGNORECASE)
@@ -54,7 +56,7 @@ _SKIP_PHRASES = (
 
 
 def _normalize_eta(raw: Optional[str]) -> Optional[str]:
-    """'6/29' or '6/29/26' â 'YYYY-MM-DD'."""
+    """'6/29' or '6/29/26' -> 'YYYY-MM-DD'."""
     if not raw:
         return None
     raw = raw.strip()
@@ -75,23 +77,28 @@ def parse(subject: str, body: str) -> list[dict]:
     Parse a Square One inspection request email.
 
     Returns list of dicts:
-        {lot_id, unit_id, awb, eta_fecha}
+        {lot_id, unit_id, awb, eta_fecha, location}
 
-    lot_id  â Square One lot / PO identifier (e.g. 'DOL-2726')
-    unit_id â ISO container number if found on the same line (or None)
-    awb     â air waybill number if found on the same line (or None)
-    eta_fecha â YYYY-MM-DD from subject ETA, or None
+    lot_id  — Square One lot / PO identifier (e.g. 'DOL-2726')
+    unit_id — ISO container number if found on the same line (or None)
+    awb     — air waybill number if found on the same line (or None)
+    eta_fecha — YYYY-MM-DD from subject ETA, or None
+    location — 'Texas' for Transkool (McAllen) requests, 'Miami' otherwise
     """
     records: list[dict] = []
     seen_lots: set[str] = set()
 
-    # ââ Global ETA from subject ââââââââââââââââââââââââââââââââââââââââââââââ
+    # Transkool = the McAllen, TX warehouse. Every other SQ1 request
+    # ("arriving at the warehouse today") is the Miami warehouse.
+    location = 'Texas' if 'TRANSKOOL' in subject.upper() else 'Miami'
+
+    # ── Global ETA from subject ──────────────────────────────────────────────
     eta: Optional[str] = None
     m = _ETA_RE.search(subject)
     if m:
         eta = _normalize_eta(m.group(1))
 
-    # ââ Format 1: LOT ID(s) in subject line âââââââââââââââââââââââââââââââââ
+    # ── Format 1: LOT ID(s) in subject line ─────────────────────────────────
     m = _LOT_ID_SUBJ_RE.search(subject)
     if m:
         lot_part = m.group(1).strip()
@@ -109,9 +116,10 @@ def parse(subject: str, body: str) -> list[dict]:
                         'unit_id':  None,
                         'awb':      None,
                         'eta_fecha': eta,
+                        'location': location,
                     })
 
-    # ââ Format 2: lots listed in body text ââââââââââââââââââââââââââââââââââ
+    # ── Format 2: lots listed in body text ──────────────────────────────────
     # Parse line by line; skip boilerplate lines
     for line in body.splitlines():
         line_clean = re.sub(r'\s+', ' ', line).strip()
@@ -137,6 +145,7 @@ def parse(subject: str, body: str) -> list[dict]:
                 'unit_id':   unit_id,
                 'awb':       awb,
                 'eta_fecha': eta,
+                'location':  location,
             })
 
     if records:

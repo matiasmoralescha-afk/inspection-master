@@ -114,6 +114,22 @@ create table if not exists header_mapping_cache (
     created_at   text not null
 );
 
+-- Client registry surfaced on the /clients dashboard page. config/clients.yaml
+-- remains the agent's own source of truth; this table is a separately-managed
+-- copy for web CRUD (see migrations/004_add_clients.sql for the seed data).
+create table if not exists clients (
+    id           bigint generated always as identity primary key,
+    display_name text not null,
+    slug         text unique not null,
+    locations    text,          -- JSON array e.g. '["Miami","Texas"]'
+    known_modes  text,          -- JSON array e.g. '["ocean","air"]'
+    cutoff_hour  integer,
+    active       integer not null default 1,
+    created_at   timestamptz not null default now()
+);
+
+alter table clients disable row level security;
+
 -- No RLS — internal tool, anon key reads freely
 alter table shipments disable row level security;
 alter table processed_messages disable row level security;

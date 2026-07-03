@@ -66,6 +66,22 @@ class TestNormalizeDate(unittest.TestCase):
     def test_empty(self):
         self.assertIsNone(normalize_date(''))
 
+    # Real garbage values found in production (audit 07/03/26): raw email text
+    # was flowing into eta_fecha / dia_disponible_para_inspeccion.
+
+    def test_alpine_spaced_date_inside_text(self):
+        self.assertEqual(normalize_date('ESTIMATED 10 :30 AM 07/ 02/ 26'), '2026-07-02')
+        self.assertEqual(normalize_date('ESTIMATED 11:00 AM 06 /25 /26'), '2026-06-25')
+        self.assertEqual(normalize_date('PENDING ESTIMATED IN MIAMI 06/ 19 /26'), '2026-06-19')
+
+    def test_prime_time_mm_dd_no_year(self):
+        self.assertEqual(normalize_date('07/02@05:00HRS TBC'), '2026-07-02')
+
+    def test_unparseable_returns_none_not_raw(self):
+        self.assertIsNone(normalize_date('PENDING'))
+        self.assertIsNone(normalize_date('SEE COMMENTS'))
+        self.assertIsNone(normalize_date('ESTIMATED'))
+
 
 class TestShipperParsing(unittest.TestCase):
     def test_extract_country(self):
