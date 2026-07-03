@@ -428,8 +428,15 @@ def main() -> None:
     sb_url = os.environ.get('SUPABASE_URL', '')
     sb_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
     if sb_url and sb_key and not args.dry_run:
-        supabase_sync.restore_processed_messages(conn, sb_url, sb_key)
-        supabase_sync.restore_shipments(conn, sb_url, sb_key)
+        restored_msgs  = supabase_sync.restore_processed_messages(conn, sb_url, sb_key)
+        restored_ships = supabase_sync.restore_shipments(conn, sb_url, sb_key)
+        # Fail fast: sin estado restaurado, la corrida reprocesaría TODO desde
+        # cero (minutos de Haiku al vacío) y el sync final fallaría igual —
+        # mejor abortar ya, marcar el run como failure y que suene la alerta.
+        # (Pasó el 07/03/26: SERVICE_ROLE_KEY vencida → 401 → "success" mentiroso.)
+        if restored_msgs < 0 or restored_ships < 0:
+            logger.error('Supabase inaccesible (¿SERVICE_ROLE_KEY vencida?) — abortando')
+            sys.exit(1)
 
     if args.auto_window and args.since_hours is None and sb_url and sb_key:
         last = supabase_sync.last_processed_at(sb_url, sb_key)
@@ -1112,6 +1119,11 @@ def main() -> None:
         sb_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
         if sb_url and sb_key:
             synced = supabase_sync.sync(conn, sb_url, sb_key)
+            if synced < 0:
+                logger.error('Supabase sync falló — el dashboard quedó desactualizado; '
+                             'marcando la corrida como failure')
+                conn.close()
+                sys.exit(1)
             supabase_sync.sync_processed_messages(conn, sb_url, sb_key)
             logger.info('Supabase sync: %d rows upserted', synced)
             # Directly recompute derived fields in Supabase for ALL open shipments,

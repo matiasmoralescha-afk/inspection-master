@@ -51,7 +51,7 @@ def sync(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> 
 
     except Exception:
         logger.exception('Supabase sync failed — DB is unaffected')
-        return 0
+        return -1
 
 
 def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> int:
@@ -127,7 +127,7 @@ def restore_shipments(conn: sqlite3.Connection, supabase_url: str, service_role_
 
     except Exception:
         logger.exception('Failed to restore shipments from Supabase — will only process recent emails')
-        return 0
+        return -1
 
 
 def recompute_derived_fields_in_supabase(
@@ -268,7 +268,7 @@ def restore_processed_messages(conn: sqlite3.Connection, supabase_url: str, serv
 
     except Exception:
         logger.exception('Failed to restore processed_messages from Supabase — will reprocess recent emails')
-        return 0
+        return -1
 
 
 def sync_processed_messages(conn: sqlite3.Connection, supabase_url: str, service_role_key: str) -> None:
