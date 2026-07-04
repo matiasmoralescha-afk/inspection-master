@@ -6,13 +6,12 @@ export const metadata: Metadata = {
   description: 'Control operativo de inspecciones, estados y seguimiento de calidad',
 }
 
-// Inline script prevents dark-mode flash on page load
+// Inline script prevents dark-mode flash on page load.
+// Light (white) is the default — dark only if the user explicitly chose it.
 const themeScript = `
 (function() {
   try {
-    var saved = localStorage.getItem('eqa-theme');
-    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    if (saved === 'dark' || (!saved && prefersDark)) {
+    if (localStorage.getItem('eqa-theme') === 'dark') {
       document.documentElement.classList.add('dark');
     }
   } catch(e) {}

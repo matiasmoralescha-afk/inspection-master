@@ -17,9 +17,8 @@ function useTheme() {
   const [dark, setDark] = useState(false)
 
   useEffect(() => {
-    const saved = localStorage.getItem('eqa-theme')
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    const isDark = saved ? saved === 'dark' : prefersDark
+    // Light (white) is the default — dark only if explicitly saved.
+    const isDark = localStorage.getItem('eqa-theme') === 'dark'
     setDark(isDark)
     document.documentElement.classList.toggle('dark', isDark)
   }, [])
