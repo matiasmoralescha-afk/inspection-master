@@ -105,21 +105,3 @@
   }
 }
 
-/* ── Panels compartidos (agenda, staff, clients, inspectores) ─────────────── */
-
-:root {
-  --canvas-950: #020617;
-}
-
-.glass-panel {
-  background: linear-gradient(160deg, rgba(15, 23, 42, 0.85), rgba(2, 6, 23, 0.92));
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 30px 80px rgba(2, 6, 23, 0.55);
-  backdrop-filter: blur(18px);
-}
-
-.data-panel {
-  background: rgb(248 250 252);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
-}
