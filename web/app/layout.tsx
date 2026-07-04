@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { Sidebar } from '@/components/sidebar'
 
 export const metadata: Metadata = {
   title: 'Inspection Master',
@@ -25,7 +26,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-screen bg-canvas font-ui text-ink-primary antialiased">
-        {children}
+        <div className="relative flex min-h-screen">
+          <Sidebar />
+          <div className="min-w-0 flex-1">
+            {children}
+          </div>
+        </div>
       </body>
     </html>
   )

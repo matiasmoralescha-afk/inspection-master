@@ -42,6 +42,7 @@ declare module 'next/navigation' {
   }
 
   export function useRouter(): AppRouterInstance
+  export function usePathname(): string
 }
 
 declare module 'next/types.js' {
