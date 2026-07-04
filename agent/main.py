@@ -37,6 +37,7 @@ from agent.parsers import sq1 as sq1_parser
 from agent.parsers import fresh_way as fw_parser
 from agent.parsers import altar_lot as altar_lot_parser
 from agent.parsers import alpine_lot as alpine_lot_parser
+from agent.parsers import sunkist_status as sunkist_parser
 
 load_dotenv()
 
@@ -77,8 +78,8 @@ def _get_msg_header(msg: dict, name: str) -> str:
 def _classify_message(msg: dict) -> str:
     """Return 'ocean_update', 'air_arrival', 'inspection_report',
     'sq1_receiving_card', 'prime_time_pl', 'greenfruit_arrival',
-    'fresh_way_request', 'altar_lot', 'alpine_lot', 'quality_alert',
-    or 'unknown'."""
+    'fresh_way_request', 'altar_lot', 'alpine_lot', 'sunkist_status',
+    'quality_alert', or 'unknown'."""
     sender  = _get_msg_header(msg, 'From').lower()
     subject = _get_msg_header(msg, 'Subject')
     subject_upper = subject.upper()
@@ -103,6 +104,8 @@ def _classify_message(msg: dict) -> str:
         return 'altar_lot'
     if alpine_lot_parser.is_alpine_lot(subject, sender):
         return 'alpine_lot'
+    if sunkist_parser.is_sunkist_status(subject):
+        return 'sunkist_status'
     if pl_parser.is_prime_time_pl(subject):
         return 'prime_time_pl'
     if gf_parser.is_greenfruit_sender(sender, subject, to_cc):
@@ -483,6 +486,10 @@ def main() -> None:
         # Carlos Gallo announces Alpine LA lots; domain-wide for the same reason.
         'from:@alpinefresh.com subject:LOT newer_than:14d',
     ))
+    sunkist_status_query = _apply_time_window(os.environ.get(
+        'SUNKIST_STATUS_QUERY',
+        'subject:"Sunkist Container Status" newer_than:3d',
+    ))
     sq1_query = _apply_time_window(os.environ.get(
         'SQ1_RECEIVING_CARD_QUERY',
         'subject:"SQ1 Inspection Request" newer_than:30d',
@@ -504,10 +511,12 @@ def main() -> None:
     logger.info('Fresh Way request query: %s', fw_query)
     logger.info('Altar lot query: %s', altar_lot_query)
     logger.info('Alpine lot query: %s', alpine_lot_query)
+    logger.info('Sunkist status query: %s', sunkist_status_query)
 
     threads = _collect_threads(service, [
         ocean_query, air_query, sq1_query, ir_query,
         pl_query, gf_query, fw_query, altar_lot_query, alpine_lot_query,
+        sunkist_status_query,
     ])
     logger.info('Total unique threads: %d', len(threads))
 
@@ -1059,6 +1068,84 @@ def main() -> None:
                                 conn, alpine_norm, None, po_norm,
                                 prev, clients_config, service,
                             )
+
+                elif email_type == 'sunkist_status':
+                    attachments = gmail_client.get_attachments(
+                        service, msg,
+                        mime_types=(
+                            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        ),
+                    )
+                    if not attachments:
+                        logger.warning('Sunkist status: no xlsx attachment in message %s', message_id)
+                        stats['rows_skipped'] += 1
+                    else:
+                        sunkist_norm = normalizers.normalize_client_name('Sunkist')
+                        containers = sunkist_parser.parse_xlsx(attachments[0]['data'])
+                        if not containers:
+                            stats['rows_skipped'] += 1
+
+                        for c in containers:
+                            unit_id_norm = normalizers.normalize_unit_id(c['unit_id'])
+                            po_norm = normalizers.normalize_po(c['entry_no']) if c['entry_no'] else None
+                            if not unit_id_norm:
+                                stats['rows_skipped'] += 1
+                                continue
+
+                            commodity_norm = normalizers.normalize_commodity(c['commodity_raw'])
+                            # "ACL AIRPORT" is the only warehouse name that signals air
+                            # freight; everything else in this feed is ocean.
+                            tipo = 'air' if c['warehouse'] and 'AIRPORT' in c['warehouse'].upper() else 'ocean'
+                            req_fum = business_rules.requires_fumigation(
+                                commodity_norm, c['origin'], None, fum_rules,
+                            )
+
+                            record: dict = {
+                                'cliente':                     'Sunkist',
+                                'cliente_norm':                sunkist_norm,
+                                'tipo_carga':                  tipo,
+                                'po':                          c['entry_no'],
+                                'po_norm':                     po_norm,
+                                'unit_id':                     c['unit_id'],
+                                'unit_id_norm':                unit_id_norm,
+                                'commodity':                   commodity_norm,
+                                'country_of_origin':           c['origin'],
+                                'vessel':                      c['vessel'],
+                                'bl':                          c['bill_of_lading'],
+                                'eta_fecha':                   c['eta_fecha'],
+                                # Store the feed's own warehouse name rather than
+                                # guessing a Miami/Texas/LA bucket — Manfredi Cold
+                                # Storage vs. Manfredi Pedricktown is ambiguous and
+                                # not worth mis-locating a shipment over.
+                                'location':                    c['warehouse'].title() if c['warehouse'] else None,
+                                'requiere_fumigacion':         int(req_fum),
+                                'warehouse_arrival_confirmed': int(c['warehouse_arrival_confirmed']),
+                                'warehouse_arrival_at':        c['warehouse_arrival_at'],
+                                'comments_raw':                c['latest_event'],
+                                'fuente':                      f'{thread_id}:{message_id}',
+                            }
+                            record['ready_for_inspection'] = int(
+                                business_rules.calc_ready_for_inspection(record, clients_config)
+                            )
+
+                            if args.dry_run:
+                                logger.info(
+                                    '[DRY-RUN] Sunkist: entry=%s container=%s gate_in=%s',
+                                    c['entry_no'], c['unit_id'], c['warehouse_arrival_confirmed'],
+                                )
+                                stats['rows_inserted'] += 1
+                            else:
+                                prev   = _fetch_shipment(conn, sunkist_norm, unit_id_norm, po_norm)
+                                result = db_mod.upsert_shipment(conn, record)
+                                if result == 'inserted':
+                                    stats['rows_inserted'] += 1
+                                else:
+                                    stats['rows_updated'] += 1
+
+                                _finalize_after_upsert(
+                                    conn, sunkist_norm, unit_id_norm, po_norm,
+                                    prev, clients_config, service,
+                                )
 
                 elif email_type == 'quality_alert':
                     # Same sender as inspection reports but not a shipment record —
