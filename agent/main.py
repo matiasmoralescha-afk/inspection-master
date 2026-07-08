@@ -38,6 +38,7 @@ from agent.parsers import fresh_way as fw_parser
 from agent.parsers import altar_lot as altar_lot_parser
 from agent.parsers import alpine_lot as alpine_lot_parser
 from agent.parsers import sunkist_status as sunkist_parser
+from agent.parsers import sunkist_vessel as sunkist_vessel_parser
 
 load_dotenv()
 
@@ -79,7 +80,7 @@ def _classify_message(msg: dict) -> str:
     """Return 'ocean_update', 'air_arrival', 'inspection_report',
     'sq1_receiving_card', 'prime_time_pl', 'greenfruit_arrival',
     'fresh_way_request', 'altar_lot', 'alpine_lot', 'sunkist_status',
-    'quality_alert', or 'unknown'."""
+    'sunkist_vessel', 'quality_alert', or 'unknown'."""
     sender  = _get_msg_header(msg, 'From').lower()
     subject = _get_msg_header(msg, 'Subject')
     subject_upper = subject.upper()
@@ -106,6 +107,8 @@ def _classify_message(msg: dict) -> str:
         return 'alpine_lot'
     if sunkist_parser.is_sunkist_status(subject):
         return 'sunkist_status'
+    if sunkist_vessel_parser.is_sunkist_vessel(subject):
+        return 'sunkist_vessel'
     if pl_parser.is_prime_time_pl(subject):
         return 'prime_time_pl'
     if gf_parser.is_greenfruit_sender(sender, subject, to_cc):
@@ -490,6 +493,12 @@ def main() -> None:
         'SUNKIST_STATUS_QUERY',
         'subject:"Sunkist Container Status" newer_than:3d',
     ))
+    sunkist_vessel_query = _apply_time_window(os.environ.get(
+        'SUNKIST_VESSEL_QUERY',
+        # Only 3 of ~15 vessels per Container Status report get one of these
+        # threads (confirmed 07/2026) — this is a complement, not a substitute.
+        'subject:"SUNKIST GLOBAL" subject:"ETA" newer_than:14d',
+    ))
     sq1_query = _apply_time_window(os.environ.get(
         'SQ1_RECEIVING_CARD_QUERY',
         'subject:"SQ1 Inspection Request" newer_than:30d',
@@ -512,11 +521,12 @@ def main() -> None:
     logger.info('Altar lot query: %s', altar_lot_query)
     logger.info('Alpine lot query: %s', alpine_lot_query)
     logger.info('Sunkist status query: %s', sunkist_status_query)
+    logger.info('Sunkist vessel query: %s', sunkist_vessel_query)
 
     threads = _collect_threads(service, [
         ocean_query, air_query, sq1_query, ir_query,
         pl_query, gf_query, fw_query, altar_lot_query, alpine_lot_query,
-        sunkist_status_query,
+        sunkist_status_query, sunkist_vessel_query,
     ])
     logger.info('Total unique threads: %d', len(threads))
 
@@ -1093,9 +1103,6 @@ def main() -> None:
                                 continue
 
                             commodity_norm = normalizers.normalize_commodity(c['commodity_raw'])
-                            # "ACL AIRPORT" is the only warehouse name that signals air
-                            # freight; everything else in this feed is ocean.
-                            tipo = 'air' if c['warehouse'] and 'AIRPORT' in c['warehouse'].upper() else 'ocean'
                             req_fum = business_rules.requires_fumigation(
                                 commodity_norm, c['origin'], None, fum_rules,
                             )
@@ -1103,7 +1110,13 @@ def main() -> None:
                             record: dict = {
                                 'cliente':                     'Sunkist',
                                 'cliente_norm':                sunkist_norm,
-                                'tipo_carga':                  tipo,
+                                # Every row in this feed has a Vessel (it's part of the
+                                # master-row filter in sunkist_status.parse_xlsx) — this
+                                # is exclusively ocean cargo. "ACL AIRPORT" is just the
+                                # name of the destination clearance facility, confirmed
+                                # against real Seaboard Verde / HSL Nike vessel data —
+                                # it does NOT mean the container flew in.
+                                'tipo_carga':                  'ocean',
                                 'po':                          c['entry_no'],
                                 'po_norm':                     po_norm,
                                 'unit_id':                     c['unit_id'],
@@ -1132,6 +1145,75 @@ def main() -> None:
                                 logger.info(
                                     '[DRY-RUN] Sunkist: entry=%s container=%s gate_in=%s',
                                     c['entry_no'], c['unit_id'], c['warehouse_arrival_confirmed'],
+                                )
+                                stats['rows_inserted'] += 1
+                            else:
+                                prev   = _fetch_shipment(conn, sunkist_norm, unit_id_norm, po_norm)
+                                result = db_mod.upsert_shipment(conn, record)
+                                if result == 'inserted':
+                                    stats['rows_inserted'] += 1
+                                else:
+                                    stats['rows_updated'] += 1
+
+                                _finalize_after_upsert(
+                                    conn, sunkist_norm, unit_id_norm, po_norm,
+                                    prev, clients_config, service,
+                                )
+
+                elif email_type == 'sunkist_vessel':
+                    parsed_subj = sunkist_vessel_parser.parse_subject(subject)
+                    html = gmail_client.get_message_body(msg)
+                    rows = sunkist_vessel_parser.parse_html(html or '')
+                    if not rows:
+                        stats['rows_skipped'] += 1
+                    else:
+                        sunkist_norm = normalizers.normalize_client_name('Sunkist')
+                        for row in rows:
+                            unit_id_norm = normalizers.normalize_unit_id(row['unit_id'])
+                            if not unit_id_norm:
+                                stats['rows_skipped'] += 1
+                                continue
+
+                            # This thread never has an Entry# (po) — enrich with
+                            # whatever the xlsx already set for this container so
+                            # the upsert merges into that row instead of creating
+                            # a duplicate with an empty po part of the lookup_key.
+                            existing_po = conn.execute(
+                                'SELECT po, po_norm FROM shipments WHERE cliente_norm=? AND unit_id_norm=?',
+                                (sunkist_norm, unit_id_norm),
+                            ).fetchone()
+                            po      = existing_po['po'] if existing_po else None
+                            po_norm = existing_po['po_norm'] if existing_po else None
+
+                            commodity_norm = normalizers.normalize_commodity(row.get('commodity_raw'))
+                            delivery_date  = row.get('delivery_date')
+
+                            record: dict = {
+                                'cliente':          'Sunkist',
+                                'cliente_norm':     sunkist_norm,
+                                'tipo_carga':        'ocean',
+                                'po':                po,
+                                'po_norm':           po_norm,
+                                'unit_id':           row['unit_id'],
+                                'unit_id_norm':      unit_id_norm,
+                                'commodity':         commodity_norm,
+                                'vessel':            parsed_subj['vessel'] if parsed_subj else None,
+                                'location':          row.get('warehouse'),
+                                'fda_status':        row.get('fda_status'),
+                                'customs_status':    row.get('customs_status'),
+                                # DELIVERY is a firm warehouse-delivery date the
+                                # trucker/broker confirms in advance — more precise
+                                # than the vessel ETA the xlsx falls back on, so it
+                                # overrides eta_fecha (what calc_dia_disponible reads).
+                                'eta_fecha':         delivery_date or (parsed_subj['eta_fecha'] if parsed_subj else None),
+                                'comments_raw':      f"Trucker: {row['trucker']}" if row.get('trucker') else None,
+                                'fuente':            f'{thread_id}:{message_id}',
+                            }
+
+                            if args.dry_run:
+                                logger.info(
+                                    '[DRY-RUN] Sunkist vessel: container=%s delivery=%s',
+                                    row['unit_id'], delivery_date,
                                 )
                                 stats['rows_inserted'] += 1
                             else:

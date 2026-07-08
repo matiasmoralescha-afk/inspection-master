@@ -57,6 +57,7 @@ jobs:
           ALTAR_LOT_QUERY: 'from:@altarproduce.com newer_than:14d'
           ALPINE_LOT_QUERY: 'from:@alpinefresh.com subject:LOT newer_than:14d'
           SUNKIST_STATUS_QUERY: 'subject:"Sunkist Container Status" newer_than:3d'
+          SUNKIST_VESSEL_QUERY: 'subject:"SUNKIST GLOBAL" subject:"ETA" newer_than:14d'
           SQ1_RECEIVING_CARD_QUERY: 'subject:"SQ1 Inspection Request" newer_than:7d'
           INSPECTION_REPORT_QUERY: 'from:reports@eliteqa.app newer_than:7d'
           PRIME_TIME_PL_QUERY: 'subject:PM- newer_than:30d'
