@@ -306,12 +306,17 @@ const EMPTY_NEW_SHIPMENT: NewShipmentForm = {
 
 // ─── column definitions ──────────────────────────────────────────────────────
 
+type QuickEditCtx = {
+  onUpdate: (patch: Partial<Shipment>) => void
+  inspectors: Staff[]
+}
+
 type Col = {
   key: string
   label: string
   defaultVisible: boolean
   getValue: (s: Shipment) => string
-  render: (s: Shipment) => React.ReactNode
+  render: (s: Shipment, ctx: QuickEditCtx) => React.ReactNode
   tdClass?: string
 }
 
@@ -392,15 +397,62 @@ const COLUMNS: Col[] = [
   },
   {
     key: 'inspector', label: 'Inspector', defaultVisible: false,
-    getValue: s => s.inspector_id ? 'asignado' : '',
-    render: s => s.inspector_id
-      ? <span className="inline-flex items-center gap-1 text-[13px] text-gray-600 dark:text-slate-400"><span className="w-1.5 h-1.5 rounded-full bg-blue-400 inline-block shrink-0" />Asignado</span>
-      : <span className="text-gray-300 dark:text-slate-600 text-[13px]">—</span>,
+    getValue: s => s.inspector?.name ?? '',
+    render: (s, ctx) => (
+      <select
+        value={s.inspector_id ?? ''}
+        onClick={e => e.stopPropagation()}
+        onChange={e => {
+          e.stopPropagation()
+          ctx.onUpdate({ inspector_id: e.target.value ? Number(e.target.value) : null })
+        }}
+        className="rounded-md border border-hairline bg-surface px-1.5 py-1 text-[12px] text-ink-secondary hover:border-hairline-strong focus:outline-none focus:ring-2 focus:ring-accent/50"
+      >
+        <option value="">Sin asignar</option>
+        {ctx.inspectors.map(i => (
+          <option key={i.id} value={i.id}>{i.name}{i.zone ? ` (${i.zone})` : ''}</option>
+        ))}
+      </select>
+    ),
   },
   {
     key: 'estado_general', label: 'Status', defaultVisible: true,
     getValue: s => s.estado_general ?? '',
-    render: s => <StatusBadge s={s} />,
+    render: (s, ctx) => (
+      <button
+        type="button"
+        title="Click para marcar cerrado/abierto"
+        onClick={e => {
+          e.stopPropagation()
+          ctx.onUpdate({ estado_general: s.estado_general === 'cerrado' ? 'abierto' : 'cerrado' })
+        }}
+        className="cursor-pointer rounded-full transition-opacity hover:opacity-70"
+      >
+        <StatusBadge s={s} />
+      </button>
+    ),
+  },
+  {
+    key: 'report_sent', label: 'Reporte', defaultVisible: true,
+    getValue: s => s.report_sent === 1 ? 'enviado' : 'pendiente',
+    render: (s, ctx) => (
+      <button
+        type="button"
+        title="Click para marcar enviado/pendiente"
+        onClick={e => {
+          e.stopPropagation()
+          ctx.onUpdate({ report_sent: s.report_sent === 1 ? 0 : 1 })
+        }}
+        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] transition-opacity hover:opacity-70 ${
+          s.report_sent === 1
+            ? 'bg-ok-bg text-ok-fg'
+            : 'bg-surface-sunk text-ink-tertiary'
+        }`}
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${s.report_sent === 1 ? 'bg-emerald-500' : 'bg-gray-400 dark:bg-slate-500'}`} />
+        {s.report_sent === 1 ? 'Enviado' : 'Pendiente'}
+      </button>
+    ),
   },
 ]
 
@@ -1489,6 +1541,122 @@ function BriefingPanel({ shipments, onSelect }: { shipments: Shipment[]; onSelec
   )
 }
 
+// ─── day strip (navigate by day, "dejar lo del día") ───────────────────────────
+
+function localISO(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+type DayBucket = { date: string; weekday: string; dayNum: number; total: number; sent: number }
+
+function buildDayBuckets(shipments: Shipment[], daysBack: number): DayBucket[] {
+  const today = localISO(new Date())
+  const buckets: DayBucket[] = []
+  for (let i = daysBack; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(d.getDate() - i)
+    const date = localISO(d)
+    const rows = shipments.filter(s => s.estado_general === 'abierto' && effectiveDate(s) === date)
+    buckets.push({
+      date,
+      weekday: date === today ? 'HOY' : d.toLocaleDateString('es', { weekday: 'short' }).replace('.', '').toUpperCase(),
+      dayNum: d.getDate(),
+      total: rows.length,
+      sent: rows.filter(s => s.report_sent === 1).length,
+    })
+  }
+  return buckets
+}
+
+function DayStrip({
+  shipments, selectedDay, onSelectDay,
+}: {
+  shipments: Shipment[]
+  selectedDay: string | null
+  onSelectDay: (day: string | null) => void
+}) {
+  const today = localISO(new Date())
+  const buckets = useMemo(() => buildDayBuckets(shipments, 6), [shipments])
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {buckets.map(b => {
+        const isSelected = selectedDay === b.date
+        const isPast = b.date < today
+        const complete = b.total > 0 && b.sent === b.total
+        const behind = isPast && b.total > 0 && b.sent < b.total
+        return (
+          <button
+            key={b.date}
+            type="button"
+            onClick={() => onSelectDay(isSelected ? null : b.date)}
+            className={[
+              'flex min-w-[76px] flex-col items-center gap-0.5 rounded-xl border px-3 py-2 transition-colors',
+              isSelected
+                ? 'border-accent-ink bg-accent-ink text-surface'
+                : behind
+                  ? 'border-danger-border bg-danger-bg text-danger-fg hover:opacity-80'
+                  : complete
+                    ? 'border-ok-border bg-ok-bg text-ok-fg hover:opacity-80'
+                    : b.date === today
+                      ? 'border-hairline-strong bg-surface-muted text-ink-primary hover:border-accent-ink'
+                      : 'border-hairline bg-surface text-ink-secondary hover:border-hairline-strong',
+            ].join(' ')}
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] opacity-70">{b.weekday}</span>
+            <span className="text-lg font-semibold leading-none">{b.dayNum}</span>
+            <span className="text-[11px] tabular-nums opacity-80">{b.sent}/{b.total}</span>
+          </button>
+        )
+      })}
+
+      <input
+        type="date"
+        value={selectedDay && !buckets.some(b => b.date === selectedDay) ? selectedDay : ''}
+        onChange={e => onSelectDay(e.target.value || null)}
+        className="h-[58px] rounded-xl border border-dashed border-hairline bg-surface px-2 text-[12px] text-ink-muted"
+        title="Elegir otra fecha"
+      />
+
+      <div className="ml-1 h-[58px] w-px bg-hairline" />
+
+      <button
+        type="button"
+        onClick={() => onSelectDay(null)}
+        className={`flex h-[58px] flex-col items-center justify-center gap-0.5 rounded-xl border px-3 transition-colors ${
+          selectedDay === null
+            ? 'border-accent-ink bg-accent-ink text-surface'
+            : 'border-hairline bg-surface text-ink-secondary hover:border-hairline-strong'
+        }`}
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] opacity-70">Todos</span>
+        <span className="text-lg font-semibold leading-none">
+          {shipments.filter(s => s.estado_general === 'abierto').length}
+        </span>
+      </button>
+    </div>
+  )
+}
+
+function CoverageBar({ total, sent }: { total: number; sent: number }) {
+  const pct = total > 0 ? Math.round((sent / total) * 100) : 0
+  return (
+    <div className="flex items-center gap-3">
+      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-muted">Cobertura</span>
+      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-sunk">
+        <div
+          className="h-full rounded-full bg-accent transition-all"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="shrink-0 text-[12px] tabular-nums text-ink-tertiary">{sent} / {total} · {pct}%</span>
+    </div>
+  )
+}
+
 // ─── main component ───────────────────────────────────────────────────────────
 
 const DEFAULT_VISIBLE = new Set(COLUMNS.filter(c => c.defaultVisible).map(c => c.key))
@@ -1513,6 +1681,11 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const [filterHoy,       setFilterHoy] = useState(false)
   const deferredSearch = useDeferredValue(search)
 
+  // day strip — defaults to "hoy" so the dashboard opens already showing
+  // just today's queue; click a day or "Todos" to change scope.
+  const [selectedDay,     setSelectedDay]     = useState<string | null>(() => localISO(new Date()))
+  const [dayStatusFilter, setDayStatusFilter] = useState<'all' | 'pending' | 'sent'>('all')
+
   // ui state
   const [visibleCols, setVisibleCols] = useState<Set<string>>(DEFAULT_VISIBLE)
   const [colOrder,    setColOrder]    = useState<string[]>(() => COLUMNS.map(c => c.key))
@@ -1520,7 +1693,26 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
   const [sort,        setSort]        = useState<SortState>(null)
   const [selected,    setSelected]    = useState<Shipment | null>(null)
   const [createOpen,  setCreateOpen]  = useState(false)
+  const [inspectors,  setInspectors]  = useState<Staff[]>([])
   const dragColKey = useRef<string | null>(null)
+
+  useEffect(() => {
+    supabase
+      .from('staff')
+      .select('id, name, role, zone, active, whatsapp, email, clients_assigned, created_at')
+      .eq('role', 'inspector')
+      .eq('active', 1)
+      .order('name')
+      .then(({ data }) => setInspectors((data ?? []) as Staff[]))
+  }, [])
+
+  // Quick inline edits from the table (Status/Reporte/Inspector cells) — write
+  // straight to Supabase; the Realtime subscription above already triggers
+  // router.refresh() on any shipments change, so no local state juggling here.
+  async function quickUpdate(id: number, patch: Partial<Shipment>) {
+    const { error } = await supabase.from('shipments').update(patch).eq('id', id)
+    if (error) console.error('quickUpdate failed:', error.message)
+  }
 
   useEffect(() => {
     const p = loadProfile()
@@ -1679,6 +1871,17 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
     })
   }, [colOptions])
 
+  // Coverage for the currently selected day — independent of the ALL/PENDING/
+  // SENT quick toggle below, so the bar always reflects the day's true state.
+  const dayScope = useMemo(
+    () => shipments.filter(s => s.estado_general === 'abierto' && (!selectedDay || effectiveDate(s) === selectedDay)),
+    [shipments, selectedDay],
+  )
+  const dayCoverage = useMemo(
+    () => ({ total: dayScope.length, sent: dayScope.filter(s => s.report_sent === 1).length }),
+    [dayScope],
+  )
+
   const baseFiltered = useMemo(() => {
     const q = deferredSearch.toLowerCase()
     return shipments.filter(s => {
@@ -1686,6 +1889,9 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       if (filterEstado    && s.estado_general !== filterEstado) return false
       if (filterCommodity && s.commodity !== filterCommodity) return false
       if (filterLocation  && s.location !== filterLocation) return false
+      if (selectedDay     && effectiveDate(s) !== selectedDay) return false
+      if (dayStatusFilter === 'pending' && s.report_sent === 1) return false
+      if (dayStatusFilter === 'sent'    && s.report_sent !== 1) return false
       if (filterHoy) {
         if (s.estado_general !== 'abierto') return false
         const eff = effectiveDate(s)
@@ -1702,7 +1908,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
       }
       return true
     })
-  }, [shipments, deferredSearch, filterCliente, filterEstado, filterCommodity, filterLocation, filterHoy, colFilters])
+  }, [shipments, deferredSearch, filterCliente, filterEstado, filterCommodity, filterLocation, filterHoy, colFilters, selectedDay, dayStatusFilter])
 
   const filtered = useMemo(() => {
     if (sort) {
@@ -1806,6 +2012,38 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
 
         {/* Main */}
         <main className="flex-1 px-4 sm:px-6 py-4 space-y-3">
+
+          {/* Day strip — pick a day, or "Todos" to clear */}
+          <div className="rounded-xl border border-hairline bg-surface p-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <DayStrip shipments={shipments} selectedDay={selectedDay} onSelectDay={setSelectedDay} />
+
+              <div className="flex items-center gap-1.5">
+                {([
+                  ['all', 'Todas', dayCoverage.total],
+                  ['pending', 'Pendientes', dayCoverage.total - dayCoverage.sent],
+                  ['sent', 'Enviadas', dayCoverage.sent],
+                ] as const).map(([key, label, count]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setDayStatusFilter(key)}
+                    className={`rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors ${
+                      dayStatusFilter === key
+                        ? 'bg-accent-ink text-surface'
+                        : 'bg-surface-sunk text-ink-secondary hover:bg-surface-muted'
+                    }`}
+                  >
+                    {label} <span className="tabular-nums opacity-80">{count}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-3 border-t border-hairline pt-3">
+              <CoverageBar total={dayCoverage.total} sent={dayCoverage.sent} />
+            </div>
+          </div>
 
           {/* Filter bar */}
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1943,7 +2181,7 @@ export default function Dashboard({ shipments }: { shipments: Shipment[] }) {
                               key={col.key}
                               className={`border-b border-hairline/60 px-3 py-3 whitespace-nowrap ${col.tdClass ?? ''}`}
                             >
-                              {col.render(s)}
+                              {col.render(s, { onUpdate: patch => quickUpdate(s.id, patch), inspectors })}
                             </td>
                           ))}
                         </tr>
