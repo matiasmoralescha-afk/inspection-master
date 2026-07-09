@@ -63,6 +63,20 @@ def _find_existing(conn: sqlite3.Connection, record: dict) -> Optional[sqlite3.R
         if row:
             return row
 
+    # 2b. Reverse of step 2: this record has no po yet (e.g. a repeat
+    # ocean_update/SQ1 re-confirmation), but a prior row for this container
+    # already has one (from altar_lot/inspection_report arriving first —
+    # order isn't guaranteed). Only safe when exactly one row exists for
+    # this (cliente, unit_id): clients with a real multi-PO-per-container
+    # pattern (Fresh Way) must not get silently merged into the wrong PO.
+    if unit_id_norm and not po_norm:
+        rows = conn.execute(
+            'SELECT * FROM shipments WHERE cliente_norm=? AND unit_id_norm=?',
+            (cliente_norm, unit_id_norm),
+        ).fetchall()
+        if len(rows) == 1:
+            return rows[0]
+
     # 3. Terrestrial: no unit_id, has po — look up by (cliente, po)
     if not unit_id_norm and po_norm:
         row = conn.execute(
